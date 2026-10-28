@@ -16,6 +16,9 @@ fails=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got '$2' want '$3'"; fails=$((fails + 1)); fi; }
 
 check "config without token" "$(run config | grep -c '"hasToken":false')" 1
+odd="$tmp/odd \"dir\\"; mkdir -p "$odd"
+export EXPECT=$odd
+check "config is JSON whatever the store path" "$(PODCASTS_PLUGIN_DIR=$odd run config | python3 -c 'import json,os,sys; print(json.load(sys.stdin)["store"] == os.environ["EXPECT"].replace(os.environ["HOME"], "~", 1))')" True
 run episodes 5 latest > /dev/null 2>&1; check "episodes without token exits 12" $? 12
 echo 'short' | run save > /dev/null 2>&1; check "short token refused (26)" $? 26
 echo 'bad token!!' | run save > /dev/null 2>&1; check "junk token refused (26)" $? 26
@@ -56,11 +59,39 @@ run setposition 1001 5 false > /dev/null 2>&1; check "setposition wrong token ex
 run episodes 0 latest > /dev/null 2>&1; check "limit 0 refused (64)" $? 64
 run episodes 5 bogus > /dev/null 2>&1; check "bad source refused (64)" $? 64
 PODCASTS_API_BASE=http://evil.example run config > /dev/null 2>&1; check "plain http off-box refused" $? 64
+# A quote or newline in a base would end the header line in curl's config and
+# start a new directive (url =, output =); refuse the base before that.
+PODCASTS_WEB_BASE='https://x"' run config > /dev/null 2>&1; check "quote in web base refused (64)" $? 64
+PODCASTS_API_BASE=$'https://x\nurl = "http://127.0.0.1:1/"' run config > /dev/null 2>&1; check "newline in api base refused (64)" $? 64
+PODCASTS_WEB_BASE='https://x y' run config > /dev/null 2>&1; check "space in web base refused (64)" $? 64
+PODCASTS_WEB_BASE='https://' run config > /dev/null 2>&1; check "empty host refused (64)" $? 64
+# A token from the environment is held to the same format as a pasted one.
+check "junk env token counts as none" "$(PODCASTS_MEDIA_USER_TOKEN=$'a"\noutput = /tmp/x\n' run config | grep -c '"hasToken":false')" 1
+PODCASTS_MEDIA_USER_TOKEN='short' run episodes 5 latest > /dev/null 2>&1; check "short env token exits 12" $? 12
+check "good env token is used" "$(PODCASTS_MEDIA_USER_TOKEN=$good run episodes 5 latest | tail -n1)" "HTTP 200"
+# A cached developer token that is not JWT-shaped is ignored and re-fetched,
+# never written into curl's config.
+echo "$good" | run save
+payload=$(cut -d. -f2 "$tmp/store/dev-token")
+printf 'eyJ"\nurl = "http://127.0.0.1:1/"\n.%s.c2ln\n' "$payload" > "$tmp/store/dev-token"
+check "poisoned dev-token cache is not used" "$(run episodes 5 latest | tail -n1)" "HTTP 200"
+check "poisoned dev-token cache is replaced" "$(grep -c 'url =' "$tmp/store/dev-token")" 0
+ln -sf /dev/null "$tmp/store/dev-token.link"; mv -f "$tmp/store/dev-token.link" "$tmp/store/dev-token"
+check "symlinked dev-token is not read" "$(run episodes 5 latest | tail -n1)" "HTTP 200"
+check "symlinked dev-token is replaced by a file" "$([ -L "$tmp/store/dev-token" ] && echo link || echo file)" file
 
 run savepos 1002 321000 false; check "savepos exit 0" $? 0
 check "getpos reads it back" "$(run getpos 1002 | cut -d' ' -f1,2)" "321000 false"
 check "getpos unknown is empty" "$(run getpos 9999)" ""
 run savepos 1002 5 maybe > /dev/null 2>&1; check "savepos bad flag refused (64)" $? 64
+
+run savepos 1003 7000 true
+check "getposall lists saved positions" "$(run getposall 1002,1003,9999 | cut -d' ' -f1-3 | paste -sd'|')" "1002 321000 false|1003 7000 true"
+run getposall 'x;y' > /dev/null 2>&1; check "getposall junk ids refused (64)" $? 64
+check "getplayed empty before save" "$(run getplayed)" ""
+printf '[{"id":"1001"}]' | run saveplayed; check "saveplayed exit 0" $? 0
+check "getplayed reads it back" "$(run getplayed)" '[{"id":"1001"}]'
+check "played file mode 600" "$(stat -c %a "$tmp/store/played.json")" 600
 
 run forget; check "forget empties store" "$(ls -A "$tmp/store" | wc -l)" 0
 mkdir "$tmp/real"; ln -s "$tmp/real" "$tmp/link"

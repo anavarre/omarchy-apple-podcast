@@ -29,13 +29,14 @@ test("splitResponse", () => {
 
 test("parseEpisodes", () => {
   const body = JSON.stringify({ data: [{ id: "1", attributes: { name: "T", artistName: "S",
-    releaseDateTime: "2026-10-27T08:00:00Z", url: "u", durationInMilliseconds: 1800000,
-    artwork: { url: "a/{w}x{h}.{f}" } } }] });
+    releaseDateTime: "2026-10-27T08:00:00Z", url: "https://podcasts.apple.com/u", durationInMilliseconds: 1800000,
+    artwork: { url: "https://a/{w}x{h}.{f}" } } }] });
   const r = M.parseEpisodes(body);
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.episodes[0].title, "T");
   assert.strictEqual(r.episodes[0].show, "S");
-  assert.strictEqual(r.episodes[0].artwork, "a/80x80.jpg");
+  assert.strictEqual(r.episodes[0].url, "https://podcasts.apple.com/u");
+  assert.strictEqual(r.episodes[0].artwork, "https://a/80x80.jpg");
   assert.strictEqual(M.parseEpisodes("nope").ok, false);
   assert.strictEqual(M.parseEpisodes('{"x":1}').ok, false);
   assert.strictEqual(M.parseEpisodes('{"data":[]}').episodes.length, 0);
@@ -68,9 +69,40 @@ test("player helpers", () => {
   assert.strictEqual(M.parseStatus("nope"), null);
   assert.strictEqual(M.parseStatus('{"position":null,"duration":-1}').position, 0);
   const ep = M.parseEpisodes(JSON.stringify({ data: [{ id: "1", attributes: { name: "T", assetUrl: "https://a/b.mp3",
-    artwork: { url: "x/{w}x{h}.{f}" } } }] })).episodes[0];
+    artwork: { url: "https://x/{w}x{h}.{f}" } } }] })).episodes[0];
   assert.strictEqual(ep.assetUrl, "https://a/b.mp3");
-  assert.strictEqual(ep.artworkLarge, "x/300x300.jpg");
+  assert.strictEqual(ep.artworkLarge, "https://x/300x300.jpg");
+});
+
+// Nothing from the feed may name a non-web URL or a non-numeric id: those
+// values reach xdg-open, Image.source, mpv and the scripts' argv.
+test("untrusted URLs and ids are dropped", () => {
+  assert.strictEqual(M.httpUrl("https://a.example/x.mp3"), "https://a.example/x.mp3");
+  assert.strictEqual(M.httpUrl("HTTP://a.example/x"), "HTTP://a.example/x");
+  assert.strictEqual(M.httpUrl(" https://a.example/x \n"), "https://a.example/x");
+  for (const bad of ["file:///etc/passwd", "javascript:alert(1)", "ssh://h", "vnc://h", "//a.example/x",
+    "https://a.example/x y", "https://a.example/x\"", "https://a.example/<", "https://a.example/\u0007", "", null, undefined, 42])
+    assert.strictEqual(M.httpUrl(bad), "", String(bad));
+  const r = M.parseEpisodes(JSON.stringify({ data: [{ id: "__proto__", attributes: { name: "T",
+    url: "file:///etc/passwd", assetUrl: "javascript:alert(1)", artwork: { url: "file:///x/{w}x{h}.{f}" } } }] }));
+  assert.deepStrictEqual({ ...r.episodes[0] }, { id: "", title: "T", show: "", published: "", url: "",
+    artwork: "", artworkLarge: "", assetUrl: "", durationMs: 0 });
+  assert.strictEqual(M.episodeId("1001"), "1001");
+  assert.strictEqual(M.episodeId("1001;rm"), "");
+  assert.strictEqual(M.episodeId("__proto__"), "");
+  // A played.json written by an older version, or by hand, gets the same treatment.
+  const s = M.sanitizeEpisode({ id: 7, title: "T", url: "file:///x", assetUrl: "https://a/b.mp3", durationMs: "-5", junk: 1 });
+  assert.deepStrictEqual({ ...s }, { id: "7", title: "T", show: "", published: "", url: "",
+    artwork: "", artworkLarge: "", assetUrl: "https://a/b.mp3", durationMs: 0 });
+  assert.strictEqual(M.sanitizeEpisode(null).id, "");
+  assert.strictEqual(M.sanitizeEpisode("x").id, "");
+  const p = M.parsePositions(JSON.stringify({ data: [
+    { id: "__proto__", attributes: { positionInMilliseconds: 5, completed: true } },
+    { id: "1", attributes: { positionInMilliseconds: 5, completed: true } }] }));
+  assert.deepStrictEqual(Object.keys(p), ["1"]);
+  assert.strictEqual(Object.getPrototypeOf(p), vm.runInContext("Object.prototype", ctx));
+  assert.strictEqual(p.ms, undefined);
+  assert.strictEqual(p["nope"], undefined);
 });
 
 test("speed helpers", () => {
@@ -118,6 +150,8 @@ test("local positions", () => {
   assert.strictEqual(M.parseLocalPosition("754000 false 1790000000\n").ms, 754000);
   assert.strictEqual(M.parseLocalPosition("754000 false 1790000000").at, 1790000000000);
   assert.strictEqual(M.parseLocalPosition("junk"), null);
+  assert.strictEqual(M.parseLocalPositions("7 5000 false 1790000000\njunk\n9 1 true 1790000001\n")["9"].completed, true);
+  assert.strictEqual(M.parseLocalPositions("7 5000 false 1790000000\n")["7"].ms, 5000);
   const apple = { ms: 600000, completed: false, at: 1000 }, local = { ms: 900000, completed: false, at: 2000 };
   assert.strictEqual(M.newerPosition(apple, local), local);
   assert.strictEqual(M.newerPosition({ ...apple, at: 3000 }, local).ms, 600000);

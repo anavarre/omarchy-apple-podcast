@@ -37,6 +37,8 @@ if [ -z "$run" ]; then
   case "${XDG_RUNTIME_DIR:-}" in /*) run="$XDG_RUNTIME_DIR/omarchy-apple-podcasts" ;; esac
 fi
 [ -n "$run" ] || { printf 'No XDG_RUNTIME_DIR, so there is nowhere safe for the player socket.\n' >&2; exit 24; }
+# The path becomes part of a socat address, where "," and ":" have meaning.
+case "$run" in *[!A-Za-z0-9/._-]*) printf 'Refusing %s: the player directory may only contain letters, digits, / . _ -\n' "$run" >&2; exit 24 ;; esac
 sock="$run/mpv.sock"
 
 # The chosen speed outlives mpv and the session, so it lives in the config dir.
@@ -67,10 +69,11 @@ cmd_play() {
   prepare
   alive && { printf '{"command":["quit"]}\n' | ipc > /dev/null; sleep 0.2; }
   rm -f "$sock"
-  # --no-config and --ytdl=no: neither the user's mpv.conf nor a youtube-dl
-  # hook gets to run on a URL that came from a remote catalogue. After `--`
-  # everything is a file name, so a URL can never be read as an option.
-  setsid -f mpv --no-config --no-video --ytdl=no --really-quiet --force-window=no \
+  # --no-config, --load-scripts=no and --ytdl=no: neither the user's mpv.conf,
+  # their Lua/JS scripts nor a youtube-dl hook gets to run on a URL that came
+  # from a remote catalogue. After `--` everything is a file name, so a URL
+  # can never be read as an option.
+  setsid -f mpv --no-config --load-scripts=no --no-video --ytdl=no --really-quiet --force-window=no \
     --idle=no --audio-display=no --input-ipc-server="$sock" --speed="$(saved_speed)" --start="$start" \
     --force-media-title="$title" ${PODCASTS_MPV_AO:+--ao="$PODCASTS_MPV_AO"} \
     -- "$url" > /dev/null 2>&1 < /dev/null
@@ -93,8 +96,15 @@ cmd_seek() {
 
 cmd_speed() {
   case "${1:-}" in 0.8|1|1.3|1.5|1.8|2) ;; *) usage 'speed: RATE must be one of 0.8 1 1.3 1.5 1.8 2' ;; esac
-  local dir; dir=$(dirname "$speedfile")
-  if [ ! -L "$dir" ] && mkdir -p "$dir" 2> /dev/null; then printf '%s\n' "$1" > "$speedfile" 2> /dev/null; fi
+  # Same rules as the credential store it lives in: a directory of the
+  # user's own, 0700, and never a write through a symlink.
+  local dir t; dir=$(dirname "$speedfile")
+  if [ ! -L "$dir" ] && [ ! -L "$speedfile" ] && mkdir -p "$dir" 2> /dev/null && chmod 700 "$dir" 2> /dev/null && [ -O "$dir" ]; then
+    # mktemp makes it 0600; the rename makes the change atomic.
+    if t=$(mktemp "$dir/.speed.XXXXXX" 2> /dev/null); then
+      if ! { printf '%s\n' "$1" > "$t" && mv -f "$t" "$speedfile"; } 2> /dev/null; then rm -f "$t"; fi
+    fi
+  fi
   alive || return 0
   printf '{"command":["set_property","speed",%s]}\n' "$1" | ipc > /dev/null
 }

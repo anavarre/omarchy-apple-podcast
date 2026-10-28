@@ -52,6 +52,16 @@ Panel {
   readonly property bool showAccount: root.accountOpen && root.signedIn
   property int selected: 0
 
+  // Finished episodes leave the list and are only reached through the Played
+  // view (p).
+  property bool showPlayed: false
+  // Played ones are kept by the service, so they outlive the feed.
+  readonly property var listed: root.showPlayed ? root.podcasts.playedEpisodes
+    : root.episodes.filter(function(e) {
+      var pos = root.podcasts.positions[e.id]
+      return !(pos ? pos.completed === true : root.podcasts.playedSet[e.id] === true)
+    })
+
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Color.muted
   readonly property color accent: Color.accent
@@ -69,6 +79,8 @@ Panel {
     readonly property string signInError: ""
     readonly property var episodes: []
     readonly property var positions: ({})
+    readonly property var playedEpisodes: []
+    readonly property var playedSet: ({})
     readonly property var nowPlaying: null
     readonly property string playerState: "idle"
     readonly property real position: 0
@@ -79,6 +91,7 @@ Panel {
     property bool playerVisible: false
     readonly property real speed: 1
     function setSpeed(rate) {}
+    function sameEpisode(a, b) { return false }
     function play(episode) {}
     function togglePlay() {}
     function skip(seconds) {}
@@ -95,6 +108,7 @@ Panel {
       root.accountOpen = false
       root.playerOpen = false
       root.speedOpen = false
+      root.showPlayed = false
       root.selected = 0
       if (root.signedIn) root.podcasts.refresh()
     }
@@ -106,16 +120,18 @@ Panel {
   onPlayerOnScreenChanged: { if (root.service) root.service.playerVisible = root.playerOnScreen }
 
   function moveSelection(dy) {
-    if (root.episodes.length === 0) return
-    root.selected = Math.max(0, Math.min(root.episodes.length - 1, root.selected + dy))
+    if (root.listed.length === 0) return
+    root.selected = Math.max(0, Math.min(root.listed.length - 1, root.selected + dy))
   }
 
   function openEpisode(index) {
-    var e = root.episodes[index]
+    var e = root.listed[index]
     if (!e) return
     root.podcasts.play(e)
     root.playerOpen = true
   }
+
+  onListedChanged: root.selected = Math.max(0, Math.min(root.listed.length - 1, root.selected))
 
   function seekFromClick(x, width) {
     if (root.duration > 0 && width > 0) root.podcasts.seekTo(root.duration * Math.max(0, Math.min(1, x / width)))
@@ -159,6 +175,7 @@ Panel {
         if (root.showAccount) root.accountOpen = false
         else if (root.showPlayer && root.speedOpen) root.speedOpen = false
         else if (root.showPlayer) root.playerOpen = false
+        else if (root.showPlayed) { root.showPlayed = false; root.selected = 0 }
         else root.close()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
@@ -169,6 +186,7 @@ Panel {
           return
         }
         if (text === "r") root.podcasts.refresh()
+        else if (text === "p" && !root.showAccount) { root.showPlayed = !root.showPlayed; root.selected = 0 }
         else if (text === "c") root.accountOpen = !root.accountOpen
       }
 
@@ -545,15 +563,15 @@ Panel {
 
           Text {
             width: parent.width
-            visible: root.episodes.length === 0 && !root.loading && root.errorText === ""
-            text: "No episodes."
+            visible: root.listed.length === 0 && !root.loading && root.errorText === ""
+            text: root.showPlayed ? "No played episodes." : "No episodes."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
           }
 
           Repeater {
-            model: root.episodes
+            model: root.listed
 
             Rectangle {
               id: row
@@ -564,10 +582,28 @@ Panel {
               radius: Style.space(6)
               color: row.index === root.selected ? Qt.alpha(root.accent, 0.18) : "transparent"
 
+              // Episodes of one show share the same artwork URL, and Image's pixmap
+              // cache keeps the decoded bitmap in memory, so each icon is fetched
+              // once however many rows use it.
+              Image {
+                id: rowIcon
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(8)
+                width: visible ? Style.space(32) : 0
+                height: width
+                visible: source !== ""
+                source: row.modelData.artwork
+                sourceSize: Qt.size(Style.space(64), Style.space(64))
+                fillMode: Image.PreserveAspectCrop
+                cache: true
+                asynchronous: true
+              }
+
               Column {
                 id: rowText
                 anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
+                anchors.left: rowIcon.right
                 anchors.right: parent.right
                 anchors.margins: Style.space(8)
                 spacing: Style.space(2)
@@ -614,6 +650,34 @@ Panel {
                 onEntered: root.selected = row.index
                 onClicked: root.openEpisode(row.index)
               }
+
+              // Play/pause straight from the list: the icon turns into a button on hover.
+              Rectangle {
+                id: rowPlay
+                readonly property bool current: root.podcasts.sameEpisode(root.nowPlaying, row.modelData) && root.playerState !== "ended"
+                readonly property bool active: current && (root.isPlaying || root.playerState === "buffering")
+                anchors.fill: rowIcon
+                visible: rowIconHover.containsMouse
+                radius: Style.space(4)
+                color: Qt.rgba(0, 0, 0, 0.55)
+                Text {
+                  anchors.centerIn: parent
+                  text: rowPlay.active ? "⏸" : "▶"
+                  color: "white"
+                  font.pixelSize: Style.font.body
+                }
+              }
+              MouseArea {
+                id: rowIconHover
+                anchors.fill: rowIcon
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onEntered: root.selected = row.index
+                onClicked: {
+                  if (rowPlay.current) root.podcasts.togglePlay()
+                  else root.podcasts.play(root.listed[row.index])
+                }
+              }
             }
           }
         }
@@ -629,7 +693,21 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
           Text {
-            text: root.showAccount ? "c Back" : "c Account"
+            text: root.showPlayed ? "p Unplayed" : "p Played"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+          Text {
+            visible: root.showAccount || root.showPlayed
+            text: "Esc Back"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+          Text {
+            visible: !root.showAccount
+            text: "c Account"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall

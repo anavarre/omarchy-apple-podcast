@@ -28,6 +28,27 @@ The token is stored `0600` in `~/.config/omarchy/apple-podcasts/`. The web playe
 developer token is read from its JavaScript at run time and cached until it expires.
 `bin/podcasts-api` makes every request; the token never appears in argv.
 
+## Security notes
+
+- Both tokens reach curl through a config on stdin, never argv. Everything that goes
+  into that config (the two tokens, the API and web base URLs) is checked against a
+  strict character set first, so no value can add a line to it. A token from
+  `PODCASTS_MEDIA_USER_TOKEN` or a cached developer token that fails the check counts
+  as absent.
+- Only `https://` bases are accepted (plus loopback `http://` for the tests), curl
+  follows no redirect on an authenticated request, and the response size is bounded.
+- Every URL in Apple's answer (`url`, `assetUrl`, artwork) and in the local
+  `played.json` is kept only if it is `http(s)://`: that is all that may be opened in
+  the browser, loaded as artwork or handed to mpv. Episode ids must be numeric before
+  they reach a script's argv or a lookup table.
+- mpv runs with `--no-config --load-scripts=no --ytdl=no` and the URL after `--`, so
+  nothing from the catalogue is read as an option or run through a hook. Its IPC
+  socket lives under `$XDG_RUNTIME_DIR` (0700).
+- The store must be a directory the user owns, not a symlink; files are written
+  `0600` via a temporary file and rename, and nothing is read or written through a
+  symlink.
+- Remote text (titles, show names, errors) is rendered as plain text, never rich text.
+
 ## Playing
 
 Click an episode to open the focused player: play/pause, skip back and forward
@@ -50,11 +71,11 @@ this computer. Starting an episode asks Apple where it was left (on any device) 
 resumes there; episodes you finished or are in the last 10 s
 of start from the top (any other position, however early, is kept). While you listen, the position is written back every 15 s and on
 pause, stop, switching episode and end, so the phone resumes from here. Rows in the list
-show "At 12:34" or "Played". Positions use `GET`/`PUT /v1/me/playback/positions/podcast-episodes`,
+show "At 12:34" or "Played". Played episodes drop out of the list; press `p` to switch to the list of played ones (and back). Positions use `GET`/`PUT /v1/me/playback/positions/podcast-episodes`,
 the calls the web player makes. The position is also saved on this computer the moment it is known (`positions/` in the store), and the newer of the two wins when you resume, so a slow or refused write to Apple, or switching episodes straight away, no longer sends you back to the top. If Apple can't be reached, the local copy is used.
 
 ## Status
 
-`tests/run` covers the model, the API script (fixture server, including positions) and the player (real mpv, null
+Run `tests/run` locally (needs `node`, `python3`, `curl`, `mpv`, `socat`); GitHub Actions runs the same plus shellcheck on every push and PR. It covers the model, the API script (fixture server, including positions) and the player (real mpv, null
 audio output). The episode list has been seen working against Apple's real API. The player's
 QML (panel view, keys, clicks) has only been loaded by the shell, not exercised by a test.

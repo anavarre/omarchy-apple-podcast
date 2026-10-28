@@ -53,6 +53,22 @@ function text(value) {
   return value === undefined || value === null ? "" : String(value)
 }
 
+// Only a web URL may be opened in the browser, loaded as artwork or handed to
+// mpv. Anything else that arrives in the feed or the played list (file://,
+// javascript:, a custom scheme another app has registered, quotes or control
+// characters) is dropped rather than passed on.
+function httpUrl(value) {
+  var s = text(value).trim()
+  return /^https?:\/\/[^\s\x00-\x1F\x7F"<>\\]+$/i.test(s) ? s : ""
+}
+
+// Apple's episode ids are decimal numbers, and that is all the scripts accept
+// and all that is safe as a key of the positions maps ("__proto__" is not).
+function episodeId(value) {
+  var s = text(value)
+  return /^[0-9]+$/.test(s) ? s : ""
+}
+
 function clampEpisodeLimit(value) {
   var n = Math.round(Number(value))
   if (!isFinite(n)) return 10
@@ -105,21 +121,39 @@ function artworkUrl(artwork, size) {
   return u.replace("{w}", size).replace("{h}", size).replace("{f}", "jpg")
 }
 
+// An episode as the plugin keeps it, with every field checked: ids numeric,
+// URLs http(s), the rest plain strings. Applied to Apple's answer and again to
+// what comes back from played.json, so a stored entry is held to the same rule.
+function sanitizeEpisode(e) {
+  var o = e && typeof e === "object" ? e : {}
+  var dur = Number(o.durationMs)
+  return {
+    id: episodeId(o.id),
+    title: text(o.title),
+    show: text(o.show),
+    published: text(o.published),
+    url: httpUrl(o.url),
+    artwork: httpUrl(o.artwork),
+    artworkLarge: httpUrl(o.artworkLarge),
+    assetUrl: httpUrl(o.assetUrl),
+    durationMs: isFinite(dur) && dur > 0 ? dur : 0
+  }
+}
+
 function normalizeEpisode(item) {
   var a = (item && item.attributes) || {}
-  var date = a.releaseDateTime || a.releaseDate || a.datePublished || ""
-  return {
-    id: text(item && item.id),
-    title: text(a.name || a.title),
-    show: text(a.artistName || a.showName || a.collectionName),
-    published: text(date),
-    url: text(a.url || a.websiteUrl),
+  return sanitizeEpisode({
+    id: item && item.id,
+    title: a.name || a.title,
+    show: a.artistName || a.showName || a.collectionName,
+    published: a.releaseDateTime || a.releaseDate || a.datePublished || "",
+    url: a.url || a.websiteUrl,
     artwork: artworkUrl(a.artwork, 80),
     artworkLarge: artworkUrl(a.artwork, 300),
     // The publisher's own audio file. Absent for some subscriber-only shows.
-    assetUrl: text(a.assetUrl),
-    durationMs: Number(a.durationInMilliseconds || 0) || 0
-  }
+    assetUrl: a.assetUrl,
+    durationMs: a.durationInMilliseconds
+  })
 }
 
 // Returns { ok, episodes, error }. Anything that is not the expected envelope
@@ -150,9 +184,10 @@ function parsePositions(body) {
   var out = {}
   for (var i = 0; i < json.data.length; i++) {
     var item = json.data[i], a = (item && item.attributes) || {}
+    var id = episodeId(item && item.id)
     var ms = Number(a.positionInMilliseconds)
     var at = Date.parse(text(a.recordedAtTimestamp))
-    if (item && item.id) out[String(item.id)] = { ms: isFinite(ms) && ms > 0 ? ms : 0, completed: a.completed === true, at: isFinite(at) ? at : 0 }
+    if (id !== "") out[id] = { ms: isFinite(ms) && ms > 0 ? ms : 0, completed: a.completed === true, at: isFinite(at) ? at : 0 }
   }
   return out
 }
@@ -161,6 +196,16 @@ function parsePositions(body) {
 function parseLocalPosition(out) {
   var m = /^\s*([0-9]+) (true|false) ([0-9]+)\s*$/.exec(text(out))
   return m ? { ms: Number(m[1]), completed: m[2] === "true", at: Number(m[3]) * 1000 } : null
+}
+
+// What `podcasts-api getposall` printed ("ID MS DONE EPOCH" per line), by id.
+function parseLocalPositions(out) {
+  var res = {}, lines = text(out).split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var m = /^([0-9]+) ([0-9]+) (true|false) ([0-9]+)\s*$/.exec(lines[i])
+    if (m) res[m[1]] = { ms: Number(m[2]), completed: m[3] === "true", at: Number(m[4]) * 1000 }
+  }
+  return res
 }
 
 // Whichever of Apple's and this machine's record of an episode is newer. Apple

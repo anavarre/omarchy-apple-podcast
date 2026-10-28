@@ -10,7 +10,7 @@ done
 tmp=$(mktemp -d)
 port=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
 python3 tests/audio_server.py "$port" & srv=$!
-export PODCASTS_PLAYER_DIR=$tmp/run PODCASTS_MPV_AO=null
+export HOME=$tmp PODCASTS_PLUGIN_DIR=$tmp/store PODCASTS_PLAYER_DIR=$tmp/run PODCASTS_MPV_AO=null
 run() { bash "$here/bin/podcasts-player" "$@"; }
 trap 'run stop; kill $srv 2>/dev/null; rm -rf "$tmp"' EXIT
 for _ in $(seq 50); do curl -s -o /dev/null "http://127.0.0.1:$port/ep.wav" && break; sleep 0.1; done
@@ -20,6 +20,8 @@ num() { printf '%s' "$1" | sed -n "s/.*\"$2\":\([-0-9.]*\).*/\1/p"; }
 near() { awk -v a="$1" -v b="$2" -v t="$3" 'BEGIN{d=a-b; if(d<0)d=-d; print (d<=t)?"yes":"no"}'; }
 
 run status > /dev/null 2>&1; check "status with no player exits 30" $? 30
+PODCASTS_PLAYER_DIR="$tmp/a,b" run status > /dev/null 2>&1; check "player dir with socat syntax refused (24)" $? 24
+PODCASTS_PLAYER_DIR="$tmp/a:b" run status > /dev/null 2>&1; check "player dir with colon refused (24)" $? 24
 run toggle > /dev/null 2>&1; check "toggle with no player exits 30" $? 30
 run play 'file:///etc/passwd' x > /dev/null 2>&1; check "file:// refused (64)" $? 64
 run play 'https://x.test/a b.mp3' x > /dev/null 2>&1; check "whitespace URL refused (64)" $? 64
@@ -56,6 +58,12 @@ run speed 0.8; sleep 0.3
 check "speed 0.8 applied" "$(near "$(num "$(run status)" speed)" 0.8 0.001)" yes
 run speed 3 > /dev/null 2>&1; check "speed 3 refused (64)" $? 64
 run speed 1.5x > /dev/null 2>&1; check "speed junk refused (64)" $? 64
+check "speed file mode 600" "$(stat -c %a "$tmp/store/speed")" 600
+check "speed dir mode 700" "$(stat -c %a "$tmp/store")" 700
+ln -sf "$tmp/target" "$tmp/store/speed"
+run speed 2; check "speed through a symlink exits 0" $? 0
+check "speed is not written through a symlink" "$([ -e "$tmp/target" ] && echo written || echo no)" no
+rm -f "$tmp/store/speed"
 run speed 1; sleep 0.3
 run toggle; sleep 0.4
 check "toggle resumes" "$(run status | grep -c '"paused":false')" 1

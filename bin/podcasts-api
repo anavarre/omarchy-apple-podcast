@@ -19,6 +19,9 @@
 #                        nothing. Apple stays the source for other devices; this
 #                        is what resumes an episode when Apple is slow, down or
 #                        has not yet taken the last PUT
+#   saveplayed           read a JSON array of played episodes from stdin and keep
+#                        it on this machine, so the played list outlives the feed
+#   getplayed            print what saveplayed kept, or nothing
 #   forget               delete everything this plugin stored
 #
 # UNOFFICIAL. Apple publishes no API for a listener's library. This talks to
@@ -32,12 +35,14 @@
 # It can break whenever Apple changes the site. Personal use only.
 #
 # The token reaches curl through a config file on stdin (-K -), so it never
-# appears in argv or in `ps`.
+# appears in argv or in `ps`. Everything written into that config (both tokens
+# and the web base) is checked against a strict character set first: a quote
+# or newline there would let a line be added to curl's config (url =, output =).
 #
 # Exit codes: 12 no token on file, 20 request failed, 21 token rejected,
 # 22 response too large, 24 the credential store is unsafe or could not be
 # written, 25 the developer token could not be found, 26 bad token format,
-# 64 bad arguments. Whatever goes to stderr is cut off after 2 KiB.
+# 64 bad arguments. The panel shows at most 200 characters of stderr.
 
 set -u
 PATH=/usr/bin:/bin; export PATH
@@ -60,15 +65,31 @@ refuseUnsafe() {
 }
 
 # Both bases must be https://, except a loopback http:// one (the test
-# fixture), so the token can never cross the network in the clear.
+# fixture), so the token can never cross the network in the clear. They also go
+# into curl's config and the Origin/Referer headers, so only URL characters.
 checkBase() {
   case "$1" in
-    https://*) return 0 ;;
+    *[!]A-Za-z0-9.:/_[-]*|*//*//*) printf 'Refusing %s: not a plain URL.\n' "$1" >&2; exit 64 ;;
+    https://?*) return 0 ;;
     http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*|"http://[::1]"|"http://[::1]:"*) return 0 ;;
   esac
   printf 'Refusing %s: it must be https:// (or loopback).\n' "$1" >&2; exit 64
 }
 checkBase "$api"; checkBase "$web"
+
+# What a media-user-token may look like, wherever it comes from.
+validToken() {
+  case "$1" in ''|*[!A-Za-z0-9+/=_.-]*) return 1 ;; esac
+  [ "${#1}" -ge 40 ]
+}
+# The shape of the developer JWT. The cached one is checked before it is put in
+# curl's config: the store is the user's own, but a bad file must not get a
+# line into that config.
+validJwt() {
+  case "$1" in ''|*[!A-Za-z0-9_.-]*) return 1 ;; eyJ*.eyJ*.?*) return 0 ;; *) return 1 ;; esac
+}
+# A string as a JSON string body: backslash and quote escaped, controls gone.
+jsonStr() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\037\177'; }
 
 put() {
   local t
@@ -77,19 +98,23 @@ put() {
   if printf '%s' "$2" > "$t" && chmod 600 "$t" && mv -f "$t" "$store/$1"; then return 0; fi
   rm -f "$t"; printf 'Could not write %s.\n' "$store/$1" >&2; return 1
 }
-first() { [ -r "$1" ] && head -n1 "$1" | tr -d "\r\n"; }
+first() { [ ! -L "$1" ] && [ -f "$1" ] && [ -r "$1" ] && head -n1 "$1" | tr -d "\r\n"; return 0; }
 
 # Environment wins over the store, for anyone who would rather manage it.
+# Either way the value is held to the format `save` accepts; anything else
+# counts as no token at all.
 usertoken() {
-  if [ -n "${PODCASTS_MEDIA_USER_TOKEN:-}" ]; then printf '%s' "$PODCASTS_MEDIA_USER_TOKEN"; return; fi
-  first "$store/media-user-token"
+  local t
+  if [ -n "${PODCASTS_MEDIA_USER_TOKEN:-}" ]; then t=$PODCASTS_MEDIA_USER_TOKEN; else t=$(first "$store/media-user-token"); fi
+  validToken "$t" && printf '%s' "$t"
+  return 0
 }
 
 # curl for one request: no ~/.curlrc, no globbing, no redirects followed (a
 # redirect would carry the token to wherever it points), bounded in time and
 # size. The caller's headers come in on stdin as curl config.
 fetch() {
-  curl -q -g -sS --proto '=https,http' --max-time 20 --max-filesize "$maxbytes" \
+  curl -q -g -sS --proto '=https,http' --proto-redir '=https,http' --max-time 20 --max-filesize "$maxbytes" \
     -A 'Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0' \
     "$@"
 }
@@ -105,6 +130,7 @@ jwtexp() {
 devtoken() {
   local cached exp page bundle js tok
   cached=$(first "$store/dev-token")
+  validJwt "$cached" || cached=""
   if [ -n "$cached" ] && [ "${1:-}" != "fresh" ]; then
     exp=$(jwtexp "$cached")
     if [ -n "$exp" ] && [ "$exp" -gt $(( $(date +%s) + 3600 )) ]; then printf '%s' "$cached"; return 0; fi
@@ -122,7 +148,7 @@ devtoken() {
   [ -n "$bundle" ] || { printf 'No script bundle found on %s (tried /us/new, /us/library, /us/browse).\n' "$web" >&2; exit 25; }
   js=$(fetch "$web$bundle") || js=""
   tok=$(printf '%s' "$js" | grep -oE 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' | head -n1)
-  [ -n "$tok" ] || { printf 'No developer token found in %s%s.\n' "$web" "$bundle" >&2; exit 25; }
+  validJwt "$tok" || { printf 'No developer token found in %s%s.\n' "$web" "$bundle" >&2; exit 25; }
   if ! unsafe && mkdir -p "$store" 2> /dev/null; then chmod 700 "$store" 2> /dev/null; put dev-token "$tok" 2> /dev/null; fi
   printf '%s' "$tok"
 }
@@ -152,7 +178,7 @@ apiget() { apireq GET "$1" "" "${2:-20}"; }
 cmd_config() {
   local has=false
   [ -n "$(usertoken)" ] && has=true
-  printf '{"hasToken":%s,"store":"%s"}\n' "$has" "${store/#$HOME/\~}"
+  printf '{"hasToken":%s,"store":"%s"}\n' "$has" "$(jsonStr "${store/#"$HOME"/\~}")"
 }
 
 cmd_save() {
@@ -162,7 +188,7 @@ cmd_save() {
   # Accept the bare value, or a whole "media-user-token=...;" cookie pair.
   tok=${tok#media-user-token=}; tok=${tok%%;*}
   case "$tok" in ''|*[!A-Za-z0-9+/=_.-]*) printf 'That does not look like a media-user-token.\n' >&2; exit 26 ;; esac
-  [ "${#tok}" -ge 40 ] || { printf 'That token is too short to be a media-user-token.\n' >&2; exit 26; }
+  validToken "$tok" || { printf 'That token is too short to be a media-user-token.\n' >&2; exit 26; }
   refuseUnsafe
   mkdir -p "$store" && chmod 700 "$store" || { printf 'Could not create %s.\n' "$store" >&2; exit 24; }
   put media-user-token "$tok" || exit 24
@@ -172,6 +198,22 @@ cmd_forget() {
   refuseUnsafe
   rm -f "$store/media-user-token" "$store/dev-token"
   rm -rf "$store/positions"
+  rm -f "$store/played.json"
+}
+
+cmd_saveplayed() {
+  local t
+  refuseUnsafe
+  mkdir -p "$store" && chmod 700 "$store" || { printf 'Could not create %s.\n' "$store" >&2; exit 24; }
+  t=$(mktemp "$store/.tmp.XXXXXX") || exit 24
+  if head -c "$maxbytes" > "$t" && mv -f "$t" "$store/played.json"; then return 0; fi
+  rm -f "$t"; exit 24
+}
+
+cmd_getplayed() {
+  local f="$store/played.json"
+  [ -f "$f" ] && [ ! -L "$f" ] && head -c "$maxbytes" "$f"
+  return 0
 }
 
 checkPosArgs() {
@@ -199,6 +241,18 @@ cmd_getpos() {
   case "${1:-}" in ''|*[!0-9]*) usage 'getpos: ID must be an episode id' ;; esac
   local f="$store/positions/$1"
   [ -f "$f" ] && [ ! -L "$f" ] && [ ! -L "$store/positions" ] && head -n1 "$f"
+  return 0
+}
+
+# One line per id that has a saved position: "ID MS DONE EPOCH".
+cmd_getposall() {
+  local ids="${1:-}" id f
+  case "$ids" in ''|*[!0-9,]*|,*|*,,*|*,) usage 'getposall: IDS must be comma-separated episode ids' ;; esac
+  [ ! -L "$store/positions" ] || return 0
+  for id in ${ids//,/ }; do
+    f="$store/positions/$id"
+    [ -f "$f" ] && [ ! -L "$f" ] && printf '%s %s\n' "$id" "$(head -n1 "$f")"
+  done
   return 0
 }
 
@@ -242,6 +296,9 @@ case "$cmd" in
   setposition) cmd_setposition "$@" ;;
   savepos) cmd_savepos "$@" ;;
   getpos) cmd_getpos "$@" ;;
+  getposall) cmd_getposall "$@" ;;
+  saveplayed) cmd_saveplayed ;;
+  getplayed) cmd_getplayed ;;
   forget) cmd_forget ;;
   *) usage "unknown command: $cmd" ;;
 esac

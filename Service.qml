@@ -40,16 +40,58 @@ Item {
   // (Model.parsePositions). Playing an episode asks Apple again, so this only
   // has to be good enough to label the list.
   property var positions: ({})
+  // Episodes finished on any device, newest first, kept on this machine too
+  // (played.json) so they stay listed after the feed moves on. Apple's saved
+  // position decides whether one is still played.
+  property var playedEpisodes: []
+  readonly property var playedSet: {
+    var s = ({})
+    for (var i = 0; i < root.playedEpisodes.length; i++) s[root.playedEpisodes[i].id] = true
+    return s
+  }
   readonly property bool authenticated: authState === "ok"
 
   // Bumped on sign-in and forget so a result fetched under old credentials
   // never lands after them.
   property int session: 0
   property bool refreshQueued: false
+  property bool playedDirty: false
 
   onEpisodeLimitChanged: refreshSoon()
   onSourceChanged: refreshSoon()
   onRefreshMinutesChanged: timer.restart()
+
+  onEpisodesChanged: root.syncPlayed()
+  onPositionsChanged: root.syncPlayed()
+
+  function syncPlayed() {
+    var cands = root.episodes.concat(root.nowPlaying ? [root.nowPlaying] : [])
+    var seen = ({}), next = []
+    cands.forEach(function(e) {
+      var pos = root.positions[e.id]
+      if (e.id && pos && pos.completed === true && !seen[e.id]) { seen[e.id] = true; next.push(e) }
+    })
+    root.playedEpisodes.forEach(function(e) {
+      var pos = root.positions[e.id]
+      if (seen[e.id] || (pos && pos.completed === false)) return
+      seen[e.id] = true
+      next.push(e)
+    })
+    next = next.slice(0, 200)
+    var same = next.length === root.playedEpisodes.length && next.every(function(e, i) { return e.id === root.playedEpisodes[i].id })
+    if (same) return
+    root.playedEpisodes = next
+    root.savePlayed()
+  }
+
+  function savePlayed() {
+    if (!root.hasToken) return
+    if (playedSaveProcess.running) { root.playedDirty = true; return }
+    playedSaveProcess.payload = JSON.stringify(root.playedEpisodes)
+    playedSaveProcess.command = ["/usr/bin/bash", root.api, "saveplayed"]
+    playedSaveProcess.stdinEnabled = true
+    playedSaveProcess.running = true
+  }
 
   function refreshSoon() { if (authState === "ok") Qt.callLater(refresh) }
 
@@ -87,6 +129,7 @@ Item {
     forgetProcess.running = true
     root.hasToken = false
     root.authState = "signedOut"
+    root.playedEpisodes = []
     root.episodes = []
     root.positions = ({})
     root.pushedKey = ""
@@ -95,16 +138,36 @@ Item {
     root.errorText = ""
   }
 
+  // Merges positions by whichever record is newer, so neither Apple's answer nor
+  // this machine's file wipes out the other.
+  function mergePositions(found) {
+    var next = Object.assign({}, root.positions)
+    for (var id in found) next[id] = Model.newerPosition(found[id], next[id] || null)
+    root.positions = next
+  }
+
   function refreshPositions() {
-    if (!root.hasToken || positionsProcess.running || root.episodes.length === 0) return
+    if (root.episodes.length === 0) return
     var ids = root.episodes.slice(0, 30).map(function(e) { return e.id }).filter(function(id) { return /^[0-9]+$/.test(id) })
     if (ids.length === 0) return
+    // This machine's own record first: it needs no network or sign-in.
+    if (!localLoadProcess.running) {
+      localLoadProcess.session = root.session
+      localLoadProcess.command = ["/usr/bin/bash", root.api, "getposall", ids.join(",")]
+      localLoadProcess.running = true
+    }
+    if (!root.hasToken || positionsProcess.running) return
     positionsProcess.session = root.session
     positionsProcess.command = ["/usr/bin/bash", root.api, "positions", ids.join(",")]
     positionsProcess.running = true
   }
 
-  function openUrl(url) { if (url) Qt.openUrlExternally(url) }
+  // Only web URLs reach the browser: the feed must not be able to launch
+  // whatever handler the desktop has for some other scheme.
+  function openUrl(url) {
+    var u = Model.httpUrl(url)
+    if (u) Qt.openUrlExternally(u)
+  }
 
   // ---------------------------------------------------------------- playback
   // The episode being played, or null. "idle" until something is started, then
@@ -147,7 +210,7 @@ Item {
   function play(episode) {
     if (!episode) return
     if (root.sameEpisode(root.nowPlaying, episode) && root.playbackActive) return
-    if (!episode.assetUrl) {
+    if (!Model.httpUrl(episode.assetUrl)) {
       root.playError = "Apple lists no audio file for this episode (it may be subscriber-only)."
       return
     }
@@ -422,8 +485,47 @@ Item {
       try { info = JSON.parse(configOut.text) } catch (e) { info = {} }
       root.hasToken = info.hasToken === true
       root.storeDir = Model.text(info.store)
-      if (root.hasToken) root.refresh()
+      if (root.hasToken) { root.refresh(); playedGetProcess.command = ["/usr/bin/bash", root.api, "getplayed"]; playedGetProcess.running = true }
       else root.authState = "signedOut"
+    }
+  }
+
+  Process {
+    id: playedGetProcess
+    running: false
+    command: []
+    clearEnvironment: true
+    environment: Model.environment
+    stdout: StdioCollector { id: playedGetOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      var kept = []
+      try { kept = JSON.parse(playedGetOut.text) } catch (e) { kept = [] }
+      if (!Array.isArray(kept)) return
+      var have = root.playedSet
+      // The file is this plugin's own, but it is checked like the feed: a
+      // stored URL is only used if it is still a web URL.
+      var extra = kept.map(Model.sanitizeEpisode).filter(function(e) { return e.id !== "" && !have[e.id] })
+      if (extra.length === 0) return
+      root.playedEpisodes = root.playedEpisodes.concat(extra).slice(0, 200)
+      root.refreshPositions()
+    }
+  }
+
+  Process {
+    id: playedSaveProcess
+    property string payload: ""
+    running: false
+    command: []
+    clearEnvironment: true
+    environment: Model.environment
+    stdinEnabled: true
+    onStarted: {
+      write(payload)
+      payload = ""
+      stdinEnabled = false
+    }
+    onExited: function(exitCode) {
+      if (root.playedDirty) { root.playedDirty = false; Qt.callLater(root.savePlayed) }
     }
   }
 
@@ -476,7 +578,7 @@ Item {
       var e = root.nowPlaying
       // Stopped meanwhile: nothing to start. Another episode picked: look that one up.
       if (!e || !root.starting) return
-      if (e !== resumeProcess.episode) { root.fetchResume(); return }
+      if (!root.sameEpisode(e, resumeProcess.episode)) { root.fetchResume(); return }
       var response = Model.splitResponse(resumeOut.text)
       var found = exitCode === 0 && response.status === 200 ? Model.parsePositions(response.body) : null
       root.resolveResume(e, found ? found[e.id] : null)
@@ -494,7 +596,7 @@ Item {
     onExited: function(exitCode) {
       var e = root.nowPlaying
       if (!e || !root.starting) return
-      if (e !== localGetProcess.episode) { root.fetchResume(); return }
+      if (!root.sameEpisode(e, localGetProcess.episode)) { root.fetchResume(); return }
       // What was just played here may not have reached the file or Apple yet.
       var mem = root.positions[e.id]
       var local = Model.newerPosition(exitCode === 0 ? Model.parseLocalPosition(localGetOut.text) : null, mem && mem.at > 0 ? mem : null)
@@ -551,7 +653,21 @@ Item {
       if (positionsProcess.session !== root.session) return
       var response = Model.splitResponse(positionsOut.text)
       var found = exitCode === 0 && response.status === 200 ? Model.parsePositions(response.body) : null
-      if (found) root.positions = Object.assign({}, root.positions, found)
+      if (found) root.mergePositions(found)
+    }
+  }
+
+  Process {
+    id: localLoadProcess
+    property int session: 0
+    running: false
+    command: []
+    clearEnvironment: true
+    environment: Model.environment
+    stdout: StdioCollector { id: localLoadOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (localLoadProcess.session !== root.session || exitCode !== 0) return
+      root.mergePositions(Model.parseLocalPositions(localLoadOut.text))
     }
   }
 
