@@ -1,12 +1,14 @@
-# Apple Podcasts — Omarchy bar widget (proof of concept)
+# Apple Podcasts — Omarchy bar widget
 
-A bar icon that opens a panel with your latest Apple Podcasts episodes (or Up Next), and plays them.
+A bar icon that opens a panel with your latest Apple Podcasts episodes and plays them.
 
-> **Unofficial.** Apple has no API for a listener's library. This calls the private
-> endpoints behind podcasts.apple.com (`/v1/me/library/latest-episodes`,
-> `/v1/me/library/next-episodes` on `amp-api.podcasts.apple.com`) the way the web
-> player does. It can break whenever Apple changes the site and may sit outside
-> Apple's terms. Personal use only.
+> **Unofficial.** Apple has no public API for your library, so this uses the same private
+> endpoints as podcasts.apple.com. It can break whenever Apple changes the site and may
+> sit outside Apple's terms. Personal use only.
+
+## Requirements
+
+`mpv` and `socat` (for playback), plus `curl`.
 
 ## Install
 
@@ -19,74 +21,55 @@ omarchy bar move anavarre.apple-podcasts --section right
 
 ## Sign in
 
-Apple offers third parties no sign-in, so the plugin borrows your web-player session:
-open the panel, press **Open podcasts.apple.com**, sign in with your Apple Account
-(2FA happens in the browser), then copy the `media-user-token` cookie value
-(browser dev tools → Storage/Application → Cookies) and paste it into the panel.
+Apple offers no sign-in for third parties, so the widget borrows your web-player session:
 
-The token is stored `0600` in `~/.config/omarchy/apple-podcasts/`. The web player's
-developer token is read from its JavaScript at run time and cached until it expires.
-`bin/podcasts-api` makes every request; the token never appears in argv.
+1. Open the panel and press **Open podcasts.apple.com**.
+2. Sign in with your Apple Account (2FA happens in the browser).
+3. Copy the `media-user-token` cookie value (browser dev tools → Storage/Application → Cookies).
+4. Paste it into the panel.
 
-## Security notes
+The token is stored privately on your computer in `~/.config/omarchy/apple-podcasts/` and is only sent to Apple.
 
-- Both tokens reach curl through a config on stdin, never argv. Everything that goes
-  into that config (the two tokens, the API and web base URLs) is checked against a
-  strict character set first, so no value can add a line to it. A token from
-  `PODCASTS_MEDIA_USER_TOKEN` or a cached developer token that fails the check counts
-  as absent.
-- Only `https://` bases are accepted (plus loopback `http://` for the tests), curl
-  follows no redirect on an authenticated request, and the response size is bounded.
-- Every URL in Apple's answer (`url`, `assetUrl`, artwork) and in the local
-  `played.json` is kept only if it is `http(s)://`: that is all that may be opened in
-  the browser, loaded as artwork or handed to mpv. Episode ids must be numeric before
-  they reach a script's argv or a lookup table.
-- mpv runs with `--no-config --load-scripts=no --ytdl=no` and the URL after `--`, so
-  nothing from the catalogue is read as an option or run through a hook. Its IPC
-  socket lives under `$XDG_RUNTIME_DIR` (0700).
-- The store must be a directory the user owns, not a symlink; files are written
-  `0600` via a temporary file and rename, and nothing is read or written through a
-  symlink.
-- Remote text (titles, show names, errors) is rendered as plain text, never rich text.
+## Using it
 
-## Playing
+Click an episode to open the player.
 
-Click an episode to open the focused player: play/pause, skip back and forward
-(15 s each by default; 10, 15, 30, 45, 60, 75 or 90 via the `skipBackSeconds` /
-`skipForwardSeconds` settings, the lengths Apple's own clients offer), and a progress bar you can click
-to jump. Keys: `Space` play/pause, `←`/`→` skip, `o` open the episode on Apple's site,
-`s` stop, `Esc` back to the list. While something plays, the list shows a "Now
-playing" row to get back to the player.
+| Key | Action |
+| --- | --- |
+| `Space` | Play / pause |
+| `←` / `→` | Skip back / forward |
+| `o` | Open the episode on Apple's site |
+| `s` | Stop |
+| `Esc` | Back to the list |
+| `p` | Switch between unplayed and played episodes |
+| `,` | Settings |
 
-Audio comes from each episode's `assetUrl`, the publisher's own file, played by a
-headless `mpv` that `bin/podcasts-player` drives over its IPC socket (in
-`$XDG_RUNTIME_DIR`). It needs `mpv` and `socat`. mpv runs detached, so audio keeps
-going if the shell reloads. Subscriber-only episodes with no `assetUrl` say so
-instead of playing.
+- **Resume anywhere.** Your position syncs with Apple, so you can switch between your iPhone and this computer.
+- **Started episodes come first**, most recently listened to on top. The rest is grouped by show, or sorted by date if you prefer.
+- **Subscriber-only episodes** can't be played here; the panel says so.
 
-## Order of the list
+## Settings
 
-Anything you have started sits on top of the list, most recently listened to first,
-with the episode playing now leading from its first second, so what you are in the
-middle of is never buried under new arrivals. Below that, episodes are grouped by show
-(A to Z, newest first within each). Both parts are settings, in Omarchy's bar settings
-and in the panel itself: press `,` (or the footer's Settings) for **Started episodes
-first** (`inProgressFirst`), **Then order by** feed or date (`sortOrder`) and the
-**Playback speed**, which is the same one the player's speed button sets. Changes made
-in the panel apply at once and are written to the bar's settings.
+Open them from the panel (`,`) or from Omarchy's bar settings:
 
-## Picking up where you left off
+- Episodes to show (1–50)
+- Refresh interval
+- Latest episodes or your Up Next queue
+- Started episodes first, and how the rest is ordered (by show or by date)
+- Skip back / forward length (10–90 seconds)
+- Playback speed
 
-Your listening position is shared with Apple, so it follows you between the iPhone and
-this computer. Starting an episode asks Apple where it was left (on any device) and
-resumes there; episodes you finished or are in the last 10 s
-of start from the top (any other position, however early, is kept). While you listen, the position is written back every 15 s and on
-pause, stop, switching episode and end, so the phone resumes from here. Rows in the list
-show "At 12:34" or "Played". Played episodes drop out of the list; press `p` to switch to the list of played ones (and back). Positions use `GET`/`PUT /v1/me/playback/positions/podcast-episodes`,
-the calls the web player makes. The position is also saved on this computer the moment it is known (`positions/` in the store), and the newer of the two wins when you resume, so a slow or refused write to Apple, or switching episodes straight away, no longer sends you back to the top. If Apple can't be reached, the local copy is used.
+## Uninstall
 
-## Status
+```sh
+omarchy plugin disable anavarre.apple-podcasts
+rm ~/.config/omarchy/plugins/omarchy-apple-podcasts
+rm -r ~/.config/omarchy/apple-podcasts
+omarchy-shell shell rescanPlugins
+```
 
-Run `tests/run` locally (needs `node`, `python3`, `curl`, `mpv`, `socat`); GitHub Actions runs the same plus shellcheck on every push and PR. It covers the model, the API script (fixture server, including positions) and the player (real mpv, null
-audio output). The episode list has been seen working against Apple's real API. The player's
-QML (panel view, keys, clicks) has only been loaded by the shell, not exercised by a test.
+The last `rm` deletes your saved sign-in token and local listening positions. You can also remove the widget from the bar in Omarchy's bar settings. Your listening history on Apple is untouched.
+
+## License
+
+MIT
