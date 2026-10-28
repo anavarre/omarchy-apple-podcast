@@ -2,6 +2,8 @@
 
 A bar icon that opens a panel with your latest Apple Podcasts episodes and plays them.
 
+![Apple Podcasts widget preview](preview.png)
+
 > **Unofficial.** Apple has no public API for your library, so this uses the same private
 > endpoints as podcasts.apple.com. It can break whenever Apple changes the site and may
 > sit outside Apple's terms. Personal use only.
