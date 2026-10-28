@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "id": "anavarre.apple-podcasts",
+  "name": "Apple Podcasts",
+  "version": "0.1.0",
+  "author": "Aurelien Navarre",
+  "license": "MIT",
+  "description": "Your latest Apple Podcasts episodes in the bar, with a built-in player, after signing in on the web player.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Apple Podcasts",
+    "description": "Lists the latest episodes from your Apple Podcasts library and opens them in the browser.",
+    "category": "Media",
+    "aliases": [
+      "podcasts",
+      "apple-podcasts"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "episodeLimit": 10,
+      "refreshMinutes": 60,
+      "source": "latest",
+      "skipBackSeconds": 15,
+      "skipForwardSeconds": 15
+    },
+    "schema": [
+      {
+        "key": "episodeLimit",
+        "type": "integer",
+        "label": "Episodes to show",
+        "min": 1,
+        "max": 50,
+        "step": 1,
+        "defaultValue": 10,
+        "description": "How many episodes the panel lists, 1 to 50."
+      },
+      {
+        "key": "refreshMinutes",
+        "type": "enum",
+        "label": "Refresh every (minutes)",
+        "options": [
+          30,
+          60,
+          120,
+          180,
+          360,
+          720,
+          1440
+        ],
+        "defaultValue": 60,
+        "description": "How often the list refreshes on its own."
+      },
+      {
+        "key": "source",
+        "type": "enum",
+        "label": "List",
+        "options": [
+          "latest",
+          "up-next"
+        ],
+        "defaultValue": "latest",
+        "description": "Latest episodes from your library, or your Up Next queue."
+      },
+      {
+        "key": "skipBackSeconds",
+        "type": "enum",
+        "label": "Skip back (seconds)",
+        "options": [
+          10,
+          15,
+          30,
+          45,
+          60,
+          75,
+          90
+        ],
+        "defaultValue": 15,
+        "description": "How far the back button jumps. Apple's clients offer 10, 15, 30, 45, 60, 75 or 90."
+      },
+      {
+        "key": "skipForwardSeconds",
+        "type": "enum",
+        "label": "Skip forward (seconds)",
+        "options": [
+          10,
+          15,
+          30,
+          45,
+          60,
+          75,
+          90
+        ],
+        "defaultValue": 15,
+        "description": "How far the forward button jumps. Apple's clients offer 10, 15, 30, 45, 60, 75 or 90."
+      }
+    ]
+  }
+}

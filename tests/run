@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Runs every portable check: Model.js unit tests, bin/podcasts-api against a
+# fixture Apple server, bin/podcasts-player against a real mpv. None of it
+# needs Omarchy, a display, an Apple account or audible sound.
+set -u
+cd "$(dirname "$0")/.." || exit 1
+failed=""
+echo "== Model.js"; node --test tests/model.test.js > /dev/null 2>&1 && echo ok || { node --test tests/model.test.js; failed="$failed model"; }
+echo "== bin/podcasts-api"; bash tests/api.sh || failed="$failed api"
+echo "== bin/podcasts-player"; bash tests/player.sh || failed="$failed player"
+[ -z "$failed" ] && echo "ALL PASSED" || { echo "FAILED:$failed"; exit 1; }

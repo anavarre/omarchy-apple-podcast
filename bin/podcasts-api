@@ -1,0 +1,210 @@
+#!/usr/bin/bash
+# Every request the Apple Podcasts plugin makes, as one script with one
+# subcommand per request. Service.qml runs it as `/usr/bin/bash podcasts-api
+# <command> [args]` with a scrubbed environment (Model.environment); it can also
+# be run by hand to debug a sign-in.
+#
+#   config               print whether a session token is on file and where
+#                        the store is, as JSON (never the token)
+#   save                 read a media-user-token from stdin and store it
+#   episodes LIMIT SRC   GET the library's episodes, SRC latest|up-next; the
+#                        body is printed, then a last line "HTTP <status>"
+#   positions IDS        GET the saved listening position of each episode id in
+#                        IDS (comma-separated, at most 30); same output as episodes
+#   setposition ID MS DONE   PUT where you got to in episode ID: MS milliseconds
+#                        in, DONE true or false for finished; prints "HTTP <status>"
+#   forget               delete everything this plugin stored
+#
+# UNOFFICIAL. Apple publishes no API for a listener's library. This talks to
+# the private endpoints behind https://podcasts.apple.com, the way that site's
+# own JavaScript does:
+#   Authorization: Bearer <developer token>   a JWT shipped inside the web
+#                                             app's bundle; read from there at
+#                                             run time and cached until it
+#                                             expires, never hard-coded
+#   media-user-token: <cookie value>          set when you sign in to the site
+# It can break whenever Apple changes the site. Personal use only.
+#
+# The token reaches curl through a config file on stdin (-K -), so it never
+# appears in argv or in `ps`.
+#
+# Exit codes: 12 no token on file, 20 request failed, 21 token rejected,
+# 22 response too large, 24 the credential store is unsafe or could not be
+# written, 25 the developer token could not be found, 26 bad token format,
+# 64 bad arguments. Whatever goes to stderr is cut off after 2 KiB.
+
+set -u
+PATH=/usr/bin:/bin; export PATH
+
+usage() { printf 'podcasts-api: %s\n' "$1" >&2; exit 64; }
+
+cfg="${XDG_CONFIG_HOME:-}"; case "$cfg" in /*) ;; *) cfg="$HOME/.config" ;; esac
+store="${PODCASTS_PLUGIN_DIR:-$cfg/omarchy/apple-podcasts}"
+api="${PODCASTS_API_BASE:-https://amp-api.podcasts.apple.com}"
+web="${PODCASTS_WEB_BASE:-https://podcasts.apple.com}"
+maxbytes=2097152
+
+# A store that is a symlink, not a directory, or owned by someone else is
+# refused outright: writing through it could put the token wherever the link
+# points.
+unsafe() { [ -L "$store" ] || { [ -e "$store" ] && { [ ! -d "$store" ] || [ ! -O "$store" ]; }; }; }
+refuseUnsafe() {
+  unsafe && { printf 'Refusing the credential store %s: it must be a directory you own, not a symlink.\n' "$store" >&2; exit 24; }
+  return 0
+}
+
+# Both bases must be https://, except a loopback http:// one (the test
+# fixture), so the token can never cross the network in the clear.
+checkBase() {
+  case "$1" in
+    https://*) return 0 ;;
+    http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*|"http://[::1]"|"http://[::1]:"*) return 0 ;;
+  esac
+  printf 'Refusing %s: it must be https:// (or loopback).\n' "$1" >&2; exit 64
+}
+checkBase "$api"; checkBase "$web"
+
+put() {
+  local t
+  if [ -d "$store/$1" ]; then printf 'Could not write %s: it is a directory.\n' "$store/$1" >&2; return 1; fi
+  t=$(mktemp "$store/.$1.XXXXXX") || { printf 'Could not write %s.\n' "$store/$1" >&2; return 1; }
+  if printf '%s' "$2" > "$t" && chmod 600 "$t" && mv -f "$t" "$store/$1"; then return 0; fi
+  rm -f "$t"; printf 'Could not write %s.\n' "$store/$1" >&2; return 1
+}
+first() { [ -r "$1" ] && head -n1 "$1" | tr -d "\r\n"; }
+
+# Environment wins over the store, for anyone who would rather manage it.
+usertoken() {
+  if [ -n "${PODCASTS_MEDIA_USER_TOKEN:-}" ]; then printf '%s' "$PODCASTS_MEDIA_USER_TOKEN"; return; fi
+  first "$store/media-user-token"
+}
+
+# curl for one request: no ~/.curlrc, no globbing, no redirects followed (a
+# redirect would carry the token to wherever it points), bounded in time and
+# size. The caller's headers come in on stdin as curl config.
+fetch() {
+  curl -q -g -sS --proto '=https,http' --max-time 20 --max-filesize "$maxbytes" \
+    -A 'Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0' \
+    "$@"
+}
+
+# The developer token: cached in the store until its `exp`, else read from the
+# web player's bundle. Prints the JWT or exits 25.
+jwtexp() {
+  local p
+  p=$(printf '%s' "$1" | cut -d. -f2 | tr '_-' '/+')
+  while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done
+  printf '%s' "$p" | base64 -d 2> /dev/null | sed -n 's/.*"exp":\([0-9]*\).*/\1/p'
+}
+devtoken() {
+  local cached exp page bundle js tok
+  cached=$(first "$store/dev-token")
+  if [ -n "$cached" ] && [ "${1:-}" != "fresh" ]; then
+    exp=$(jwtexp "$cached")
+    if [ -n "$exp" ] && [ "$exp" -gt $(( $(date +%s) + 3600 )) ]; then printf '%s' "$cached"; return 0; fi
+  fi
+  # Any page of the player names the bundle, and Apple moves them around
+  # (/us/browse now redirects to /us/new; a 404 page still carries it), so try
+  # a few and follow redirects. No token is sent on these requests, so a
+  # redirect leaks nothing.
+  bundle=""
+  for path in /us/new /us/library /us/browse; do
+    page=$(fetch -L --max-redirs 3 "$web$path") || page=""
+    bundle=$(printf '%s' "$page" | grep -oE '/assets/index[^"]*\.js' | head -n1)
+    [ -n "$bundle" ] && break
+  done
+  [ -n "$bundle" ] || { printf 'No script bundle found on %s (tried /us/new, /us/library, /us/browse).\n' "$web" >&2; exit 25; }
+  js=$(fetch "$web$bundle") || js=""
+  tok=$(printf '%s' "$js" | grep -oE 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' | head -n1)
+  [ -n "$tok" ] || { printf 'No developer token found in %s%s.\n' "$web" "$bundle" >&2; exit 25; }
+  if ! unsafe && mkdir -p "$store" 2> /dev/null; then chmod 700 "$store" 2> /dev/null; put dev-token "$tok" 2> /dev/null; fi
+  printf '%s' "$tok"
+}
+
+# One authenticated request; prints the body and then "HTTP <status>".
+# apireq METHOD PATH [JSON BODY [MAX SECONDS]]. The body is never a secret (only
+# numbers and a flag), so it may travel in argv.
+apireq() {
+  local method="$1" path="$2" body="${3:-}" secs="${4:-20}" user dev out
+  local extra=()
+  [ -n "$body" ] && extra=(-X "$method" -H 'Content-Type: application/json' --data-binary "$body")
+  user=$(usertoken); [ -n "$user" ] || { printf 'No media-user-token on file.\n' >&2; exit 12; }
+  for attempt in 1 2; do
+    if [ "$attempt" = 1 ]; then dev=$(devtoken) || exit $?; else dev=$(devtoken fresh) || exit $?; fi
+    out=$(printf 'header = "Authorization: Bearer %s"\nheader = "media-user-token: %s"\nheader = "Origin: %s"\nheader = "Referer: %s/"\n' \
+      "$dev" "$user" "$web" "$web" | fetch -K - -H 'Accept: application/json' --max-time "$secs" "${extra[@]}" -w '\nHTTP %{http_code}\n' "$api$path") || exit 20
+    # A 401 may just mean the cached developer token went stale; retry once
+    # with a freshly scraped one before calling the user's token bad.
+    case "$out" in *$'\nHTTP 401'*) [ "$attempt" = 1 ] && continue ;; esac
+    break
+  done
+  printf '%s\n' "$out" | sed -e '${/^$/d}'
+  case "$out" in *$'\nHTTP 401'*|*$'\nHTTP 403'*) exit 21 ;; esac
+}
+apiget() { apireq GET "$1" "" "${2:-20}"; }
+
+cmd_config() {
+  local has=false
+  [ -n "$(usertoken)" ] && has=true
+  printf '{"hasToken":%s,"store":"%s"}\n' "$has" "${store/#$HOME/\~}"
+}
+
+cmd_save() {
+  local tok
+  IFS= read -r tok || true
+  tok=$(printf '%s' "$tok" | tr -d '\r\n ')
+  # Accept the bare value, or a whole "media-user-token=...;" cookie pair.
+  tok=${tok#media-user-token=}; tok=${tok%%;*}
+  case "$tok" in ''|*[!A-Za-z0-9+/=_.-]*) printf 'That does not look like a media-user-token.\n' >&2; exit 26 ;; esac
+  [ "${#tok}" -ge 40 ] || { printf 'That token is too short to be a media-user-token.\n' >&2; exit 26; }
+  refuseUnsafe
+  mkdir -p "$store" && chmod 700 "$store" || { printf 'Could not create %s.\n' "$store" >&2; exit 24; }
+  put media-user-token "$tok" || exit 24
+}
+
+cmd_forget() {
+  refuseUnsafe
+  rm -f "$store/media-user-token" "$store/dev-token"
+}
+
+cmd_episodes() {
+  local limit="${1:-}" src="${2:-latest}" ep
+  case "$limit" in ''|*[!0-9]*) usage 'episodes: LIMIT must be a number' ;; esac
+  [ "$limit" -ge 1 ] && [ "$limit" -le 50 ] || usage 'episodes: LIMIT must be 1-50'
+  case "$src" in
+    latest) ep=/v1/me/library/latest-episodes ;;
+    up-next) ep=/v1/me/library/next-episodes ;;
+    *) usage 'episodes: SRC must be latest or up-next' ;;
+  esac
+  apiget "$ep?limit=$limit"
+}
+
+# Positions are what lets another device pick up where this one stopped, so a
+# slow answer is worth less than none: playback must not wait long for it.
+cmd_positions() {
+  local ids="${1:-}"
+  case "$ids" in ''|*[!0-9,]*|,*|*,,*|*,) usage 'positions: IDS must be comma-separated episode ids' ;; esac
+  [ "$(printf '%s' "$ids" | tr -cd , | wc -c)" -lt 30 ] || usage 'positions: at most 30 ids'
+  apiget "/v1/me/playback/positions/podcast-episodes?ids=$ids" 6
+}
+
+cmd_setposition() {
+  local id="${1:-}" ms="${2:-}" done="${3:-}"
+  case "$id" in ''|*[!0-9]*) usage 'setposition: ID must be an episode id' ;; esac
+  case "$ms" in ''|*[!0-9]*) usage 'setposition: MS must be a number of milliseconds' ;; esac
+  case "$done" in true|false) ;; *) usage 'setposition: DONE must be true or false' ;; esac
+  apireq PUT "/v1/me/playback/positions/podcast-episodes?ids=$id" \
+    "{\"type\":\"playback-positions\",\"attributes\":{\"positionInMilliseconds\":$ms,\"recordedAtTimestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",\"completed\":$done}}" 10
+}
+
+[ $# -ge 1 ] || usage 'a command is required'
+cmd=$1; shift
+case "$cmd" in
+  config) cmd_config ;;
+  save) cmd_save ;;
+  episodes) cmd_episodes "$@" ;;
+  positions) cmd_positions "$@" ;;
+  setposition) cmd_setposition "$@" ;;
+  forget) cmd_forget ;;
+  *) usage "unknown command: $cmd" ;;
+esac
