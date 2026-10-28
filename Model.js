@@ -151,20 +151,35 @@ function parsePositions(body) {
   for (var i = 0; i < json.data.length; i++) {
     var item = json.data[i], a = (item && item.attributes) || {}
     var ms = Number(a.positionInMilliseconds)
-    if (item && item.id) out[String(item.id)] = { ms: isFinite(ms) && ms > 0 ? ms : 0, completed: a.completed === true }
+    var at = Date.parse(text(a.recordedAtTimestamp))
+    if (item && item.id) out[String(item.id)] = { ms: isFinite(ms) && ms > 0 ? ms : 0, completed: a.completed === true, at: isFinite(at) ? at : 0 }
   }
   return out
 }
 
-// Apple's own clients call anything under 15 s "unstarted" and a finished
-// episode starts over, so those resume from 0. So does a position within the
-// last 10 s of a known duration (nothing worth resuming).
-var resumeFloorSeconds = 15
+// What `podcasts-api getpos` printed ("MS DONE EPOCH"), as a position.
+function parseLocalPosition(out) {
+  var m = /^\s*([0-9]+) (true|false) ([0-9]+)\s*$/.exec(text(out))
+  return m ? { ms: Number(m[1]), completed: m[2] === "true", at: Number(m[3]) * 1000 } : null
+}
+
+// Whichever of Apple's and this machine's record of an episode is newer. Apple
+// wins when it gives no time, as it is the one that hears from other devices.
+function newerPosition(apple, local) {
+  if (!local) return apple || null
+  if (!apple) return local
+  return apple.at > 0 && local.at > apple.at ? local : apple
+}
+
+// A finished episode starts over, and so does one left within the last 10 s of
+// a known duration (nothing worth resuming). Anything else resumes where it was
+// left, however early: Apple's own clients ignore the first 15 s, but a pause
+// after a few seconds is still a place worth coming back to.
 var resumeTailSeconds = 10
 function resumeSeconds(pos, durationMs) {
   if (!pos || pos.completed) return 0
   var s = Math.floor(Number(pos.ms) / 1000)
-  if (!isFinite(s) || s <= resumeFloorSeconds) return 0
+  if (!isFinite(s) || s <= 0) return 0
   var dur = Number(durationMs) / 1000
   if (dur > 0 && s >= dur - resumeTailSeconds) return 0
   return s
@@ -181,6 +196,15 @@ function resumeLabel(pos, durationMs) {
   if (pos.completed) return "Played"
   var s = resumeSeconds(pos, durationMs)
   return s > 0 ? "At " + formatClock(s) : ""
+}
+
+// How far into an episode you are, 0..1, for the bar under its row. 0 when
+// there is nothing started to show (never played, finished, or duration unknown).
+function progressFraction(pos, durationMs) {
+  var dur = Number(durationMs) / 1000
+  if (!(dur > 0)) return 0
+  var s = resumeSeconds(pos, durationMs)
+  return s > 0 ? Math.min(1, s / dur) : 0
 }
 
 function relativeAge(iso, now) {

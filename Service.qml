@@ -90,7 +90,8 @@ Item {
     root.episodes = []
     root.positions = ({})
     root.pushedKey = ""
-    root.pendingPush = null
+    root.pendingPush = []
+    root.localQueue = []
     root.errorText = ""
   }
 
@@ -134,7 +135,11 @@ Item {
   // waiting for the request in flight to finish.
   property string pushedKey: ""
   property real lastPushAt: 0
-  property var pendingPush: null
+  property var pendingPush: []
+  // Positions are also kept on this machine (podcasts-api savepos), written the
+  // moment they are known, so a slow or refused PUT never costs the place.
+  property var localQueue: []
+  property string localKey: ""
   readonly property int pushEveryMs: 15000
 
   function sameEpisode(a, b) { return a && b && a.id !== "" && a.id === b.id }
@@ -167,9 +172,18 @@ Item {
     var e = root.nowPlaying
     if (!e || resumeProcess.running) return
     resumeProcess.episode = e
-    if (!/^[0-9]+$/.test(e.id) || !root.hasToken) { root.launch(e, 0); return }
+    if (!/^[0-9]+$/.test(e.id)) { root.launch(e, 0); return }
+    if (!root.hasToken) { root.resolveResume(e, null); return }
     resumeProcess.command = ["/usr/bin/bash", root.api, "positions", e.id]
     resumeProcess.running = true
+  }
+
+  // Apple's answer and this machine's record, whichever is newer, then start.
+  function resolveResume(e, apple) {
+    resumeProcess.apple = apple
+    localGetProcess.episode = e
+    localGetProcess.command = ["/usr/bin/bash", root.api, "getpos", e.id]
+    localGetProcess.running = true
   }
 
   function launch(episode, seconds) {
@@ -183,21 +197,45 @@ Item {
   // id and is not reported. Skips what Apple already has.
   function pushPosition() {
     var e = root.nowPlaying
-    if (!e || !/^[0-9]+$/.test(e.id) || !root.hasToken || root.starting) return
+    if (!e || !/^[0-9]+$/.test(e.id) || root.starting) return
     if (root.playerState !== "playing" && root.playerState !== "paused" && root.playerState !== "ended") return
     var done = Model.isFinished(root.position, root.duration)
     var ms = Math.round((done ? root.duration : root.position) * 1000)
     if (ms <= 0) return
     var key = e.id + ":" + ms + ":" + done
     if (key === root.pushedKey) return
-    root.pendingPush = { id: e.id, ms: ms, done: done, key: key }
+    root.saveLocal(e.id, ms, done)
+    if (!root.hasToken) return
+    // One slot per episode: switching episodes must not lose the old one's.
+    root.pendingPush = root.pendingPush.filter(function(p) { return p.id !== e.id })
+      .concat([{ id: e.id, ms: ms, done: done, key: key }])
     root.flushPush()
   }
 
+  function saveLocal(id, ms, done) {
+    var key = id + ":" + ms + ":" + done
+    if (key === root.localKey) return
+    root.localKey = key
+    var next = Object.assign({}, root.positions)
+    next[id] = { ms: ms, completed: done, at: Date.now() }
+    root.positions = next
+    root.localQueue = root.localQueue.filter(function(q) { return q[0] !== id })
+      .concat([[id, String(ms), done ? "true" : "false"]])
+    root.nextLocal()
+  }
+
+  function nextLocal() {
+    if (localSaveProcess.running || root.localQueue.length === 0) return
+    var q = root.localQueue[0]
+    root.localQueue = root.localQueue.slice(1)
+    localSaveProcess.command = ["/usr/bin/bash", root.api, "savepos"].concat(q)
+    localSaveProcess.running = true
+  }
+
   function flushPush() {
-    if (putProcess.running || !root.pendingPush) return
-    putProcess.sent = root.pendingPush
-    root.pendingPush = null
+    if (putProcess.running || root.pendingPush.length === 0) return
+    putProcess.sent = root.pendingPush[0]
+    root.pendingPush = root.pendingPush.slice(1)
     root.lastPushAt = Date.now()
     putProcess.command = ["/usr/bin/bash", root.api, "setposition", putProcess.sent.id,
       String(putProcess.sent.ms), putProcess.sent.done ? "true" : "false"]
@@ -428,6 +466,7 @@ Item {
   Process {
     id: resumeProcess
     property var episode: null
+    property var apple: null
     running: false
     command: []
     clearEnvironment: true
@@ -440,14 +479,42 @@ Item {
       if (e !== resumeProcess.episode) { root.fetchResume(); return }
       var response = Model.splitResponse(resumeOut.text)
       var found = exitCode === 0 && response.status === 200 ? Model.parsePositions(response.body) : null
-      var pos = found ? found[e.id] : null
-      if (found) {
+      root.resolveResume(e, found ? found[e.id] : null)
+    }
+  }
+
+  Process {
+    id: localGetProcess
+    property var episode: null
+    running: false
+    command: []
+    clearEnvironment: true
+    environment: Model.environment
+    stdout: StdioCollector { id: localGetOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      var e = root.nowPlaying
+      if (!e || !root.starting) return
+      if (e !== localGetProcess.episode) { root.fetchResume(); return }
+      // What was just played here may not have reached the file or Apple yet.
+      var mem = root.positions[e.id]
+      var local = Model.newerPosition(exitCode === 0 ? Model.parseLocalPosition(localGetOut.text) : null, mem && mem.at > 0 ? mem : null)
+      var pos = Model.newerPosition(resumeProcess.apple, local)
+      if (pos) {
         var next = Object.assign({}, root.positions)
-        if (pos) next[e.id] = pos
+        next[e.id] = pos
         root.positions = next
       }
       root.launch(e, Model.resumeSeconds(pos, e.durationMs))
     }
+  }
+
+  Process {
+    id: localSaveProcess
+    running: false
+    command: []
+    clearEnvironment: true
+    environment: Model.environment
+    onExited: function(exitCode) { if (root.localQueue.length > 0) Qt.callLater(root.nextLocal) }
   }
 
   Process {
@@ -464,11 +531,11 @@ Item {
         var s = putProcess.sent
         root.pushedKey = s.key
         var next = Object.assign({}, root.positions)
-        next[s.id] = { ms: s.ms, completed: s.done }
+        next[s.id] = { ms: s.ms, completed: s.done, at: Date.now() }
         root.positions = next
       }
       // A failure is retried by the next push, which finds the key unsent.
-      if (root.pendingPush) Qt.callLater(root.flushPush)
+      if (root.pendingPush.length > 0) Qt.callLater(root.flushPush)
     }
   }
 

@@ -96,7 +96,8 @@ test("positions and resuming", () => {
   assert.strictEqual(Object.keys(M.parsePositions('{"data":[]}')).length, 0);
   assert.strictEqual(M.resumeSeconds(p["1"], 1800000), 754);
   assert.strictEqual(M.resumeSeconds(p["2"], 1800000), 0);    // finished: from the top
-  assert.strictEqual(M.resumeSeconds({ ms: 9000, completed: false }, 1800000), 0);  // barely started
+  assert.strictEqual(M.resumeSeconds({ ms: 9000, completed: false }, 1800000), 9);  // early positions count
+  assert.strictEqual(M.resumeSeconds({ ms: 400, completed: false }, 1800000), 0);  // under a second
   assert.strictEqual(M.resumeSeconds({ ms: 1795000, completed: false }, 1800000), 0);  // in the tail
   assert.strictEqual(M.resumeSeconds({ ms: 1795000, completed: false }, 0), 1795);  // unknown length
   assert.strictEqual(M.resumeSeconds(undefined, 1800000), 0);
@@ -106,4 +107,22 @@ test("positions and resuming", () => {
   assert.strictEqual(M.resumeLabel(p["1"], 1800000), "At 12:34");
   assert.strictEqual(M.resumeLabel(p["2"], 1800000), "Played");
   assert.strictEqual(M.resumeLabel(undefined, 1800000), "");
+  assert.strictEqual(M.progressFraction({ ms: 900000, completed: false }, 1800000), 0.5);
+  assert.strictEqual(M.progressFraction({ ms: 900000, completed: true }, 1800000), 0);
+  assert.strictEqual(M.progressFraction({ ms: 900000, completed: false }, 0), 0);
+  assert.strictEqual(M.progressFraction({ ms: 1795000, completed: false }, 1800000), 0);
+  assert.strictEqual(M.progressFraction(undefined, 1800000), 0);
+});
+
+test("local positions", () => {
+  assert.strictEqual(M.parseLocalPosition("754000 false 1790000000\n").ms, 754000);
+  assert.strictEqual(M.parseLocalPosition("754000 false 1790000000").at, 1790000000000);
+  assert.strictEqual(M.parseLocalPosition("junk"), null);
+  const apple = { ms: 600000, completed: false, at: 1000 }, local = { ms: 900000, completed: false, at: 2000 };
+  assert.strictEqual(M.newerPosition(apple, local), local);
+  assert.strictEqual(M.newerPosition({ ...apple, at: 3000 }, local).ms, 600000);
+  assert.strictEqual(M.newerPosition({ ...apple, at: 0 }, local).ms, 600000);
+  assert.strictEqual(M.newerPosition(null, local), local);
+  assert.strictEqual(M.newerPosition(apple, null), apple);
+  assert.strictEqual(M.newerPosition(null, null), null);
 });

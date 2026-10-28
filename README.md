@@ -47,11 +47,11 @@ instead of playing.
 
 Your listening position is shared with Apple, so it follows you between the iPhone and
 this computer. Starting an episode asks Apple where it was left (on any device) and
-resumes there; episodes you finished, barely started (under 15 s) or are in the last 10 s
-of start from the top. While you listen, the position is written back every 15 s and on
+resumes there; episodes you finished or are in the last 10 s
+of start from the top (any other position, however early, is kept). While you listen, the position is written back every 15 s and on
 pause, stop, switching episode and end, so the phone resumes from here. Rows in the list
 show "At 12:34" or "Played". Positions use `GET`/`PUT /v1/me/playback/positions/podcast-episodes`,
-the calls the web player makes. If Apple can't be reached, playback still starts, from the top.
+the calls the web player makes. The position is also saved on this computer the moment it is known (`positions/` in the store), and the newer of the two wins when you resume, so a slow or refused write to Apple, or switching episodes straight away, no longer sends you back to the top. If Apple can't be reached, the local copy is used.
 
 ## Status
 

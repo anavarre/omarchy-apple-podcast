@@ -57,6 +57,11 @@ run episodes 0 latest > /dev/null 2>&1; check "limit 0 refused (64)" $? 64
 run episodes 5 bogus > /dev/null 2>&1; check "bad source refused (64)" $? 64
 PODCASTS_API_BASE=http://evil.example run config > /dev/null 2>&1; check "plain http off-box refused" $? 64
 
+run savepos 1002 321000 false; check "savepos exit 0" $? 0
+check "getpos reads it back" "$(run getpos 1002 | cut -d' ' -f1,2)" "321000 false"
+check "getpos unknown is empty" "$(run getpos 9999)" ""
+run savepos 1002 5 maybe > /dev/null 2>&1; check "savepos bad flag refused (64)" $? 64
+
 run forget; check "forget empties store" "$(ls -A "$tmp/store" | wc -l)" 0
 mkdir "$tmp/real"; ln -s "$tmp/real" "$tmp/link"
 echo "$good" | PODCASTS_PLUGIN_DIR=$tmp/link run save > /dev/null 2>&1; check "symlinked store refused (24)" $? 24

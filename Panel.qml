@@ -592,6 +592,20 @@ Panel {
                     Model.formatDuration(row.modelData.durationMs),
                     Model.resumeLabel(root.podcasts.positions[row.modelData.id], row.modelData.durationMs)].filter(function(s) { return s !== "" }).join(" · ")
                 }
+                Rectangle {
+                  readonly property real fraction: Model.progressFraction(root.podcasts.positions[row.modelData.id], row.modelData.durationMs)
+                  width: parent.width
+                  height: Style.space(3)
+                  radius: height / 2
+                  visible: fraction > 0
+                  color: Qt.alpha(root.foreground, 0.2)
+                  Rectangle {
+                    width: parent.width * parent.fraction
+                    height: parent.height
+                    radius: parent.radius
+                    color: root.accent
+                  }
+                }
               }
 
               MouseArea {

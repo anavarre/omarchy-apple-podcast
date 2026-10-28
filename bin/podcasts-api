@@ -13,6 +13,12 @@
 #                        IDS (comma-separated, at most 30); same output as episodes
 #   setposition ID MS DONE   PUT where you got to in episode ID: MS milliseconds
 #                        in, DONE true or false for finished; prints "HTTP <status>"
+#   savepos ID MS DONE   remember, on this machine only, where you got to in
+#                        episode ID (same arguments as setposition); no network
+#   getpos ID            print "MS DONE EPOCH" for what savepos remembered, or
+#                        nothing. Apple stays the source for other devices; this
+#                        is what resumes an episode when Apple is slow, down or
+#                        has not yet taken the last PUT
 #   forget               delete everything this plugin stored
 #
 # UNOFFICIAL. Apple publishes no API for a listener's library. This talks to
@@ -165,6 +171,35 @@ cmd_save() {
 cmd_forget() {
   refuseUnsafe
   rm -f "$store/media-user-token" "$store/dev-token"
+  rm -rf "$store/positions"
+}
+
+checkPosArgs() {
+  case "$1" in ''|*[!0-9]*) usage 'ID must be an episode id' ;; esac
+  case "${2:-0}" in ''|*[!0-9]*) usage 'MS must be a number of milliseconds' ;; esac
+  case "${3:-false}" in true|false) ;; *) usage 'DONE must be true or false' ;; esac
+}
+
+cmd_savepos() {
+  checkPosArgs "${1:-}" "${2:-}" "${3:-}"
+  local dir="$store/positions" t
+  refuseUnsafe
+  [ -L "$dir" ] && { printf 'Refusing %s: it is a symlink.\n' "$dir" >&2; exit 24; }
+  mkdir -p "$dir" && chmod 700 "$store" "$dir" || { printf 'Could not create %s.\n' "$dir" >&2; exit 24; }
+  t=$(mktemp "$dir/.tmp.XXXXXX") || exit 24
+  if printf '%s %s %s\n' "$2" "$3" "$(date +%s)" > "$t" && mv -f "$t" "$dir/$1"; then
+    # Keep the newest 200 episodes' positions, not an ever-growing pile.
+    ls -t "$dir" | tail -n +201 | while IFS= read -r f; do rm -f "$dir/$f"; done
+    return 0
+  fi
+  rm -f "$t"; exit 24
+}
+
+cmd_getpos() {
+  case "${1:-}" in ''|*[!0-9]*) usage 'getpos: ID must be an episode id' ;; esac
+  local f="$store/positions/$1"
+  [ -f "$f" ] && [ ! -L "$f" ] && [ ! -L "$store/positions" ] && head -n1 "$f"
+  return 0
 }
 
 cmd_episodes() {
@@ -205,6 +240,8 @@ case "$cmd" in
   episodes) cmd_episodes "$@" ;;
   positions) cmd_positions "$@" ;;
   setposition) cmd_setposition "$@" ;;
+  savepos) cmd_savepos "$@" ;;
+  getpos) cmd_getpos "$@" ;;
   forget) cmd_forget ;;
   *) usage "unknown command: $cmd" ;;
 esac
