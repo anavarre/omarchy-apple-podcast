@@ -160,3 +160,38 @@ test("local positions", () => {
   assert.strictEqual(M.newerPosition(apple, null), apple);
   assert.strictEqual(M.newerPosition(null, null), null);
 });
+
+test("sortEpisodes", () => {
+  const ep = (id, show, published, durationMs = 1800000) => ({ id, title: "T" + id, show, published, durationMs });
+  // Apple's order: newest first across shows.
+  const feed = [ep("1", "Beta", "2026-10-28T08:00:00Z"), ep("2", "Alpha", "2026-10-27T08:00:00Z"),
+    ep("3", "Beta", "2026-10-26T08:00:00Z"), ep("4", "Alpha", "2026-10-25T08:00:00Z"), ep("5", "Gamma", "2026-10-24T08:00:00Z")];
+  const ids = (list) => list.map((e) => e.id);
+  const positions = {
+    "3": { ms: 600000, completed: false, at: 1000 },   // started a while ago
+    "4": { ms: 300000, completed: false, at: 2000 },   // started more recently
+    "5": { ms: 1800000, completed: true, at: 3000 },   // finished: not in progress
+    "1": { ms: 1795000, completed: false, at: 4000 }   // in the tail: starts over, not in progress
+  };
+  assert.strictEqual(M.knownSortOrder("date"), "date");
+  assert.strictEqual(M.knownSortOrder("nope"), "feed");
+  // In progress first, most recently listened to on top, then by show and date.
+  assert.deepStrictEqual(ids(M.sortEpisodes(feed, positions, { inProgressFirst: true, order: "feed" })), ["4", "3", "2", "1", "5"]);
+  // Then by date instead: Apple's order for the rest.
+  assert.deepStrictEqual(ids(M.sortEpisodes(feed, positions, { inProgressFirst: true, order: "date" })), ["4", "3", "1", "2", "5"]);
+  // Nothing pinned: plain feed / date orders.
+  assert.deepStrictEqual(ids(M.sortEpisodes(feed, positions, { inProgressFirst: false, order: "feed" })), ["2", "4", "1", "3", "5"]);
+  assert.deepStrictEqual(ids(M.sortEpisodes(feed, positions, { inProgressFirst: false, order: "date" })), ["1", "2", "3", "4", "5"]);
+  // The episode playing now leads from its first second, before any saved position.
+  assert.deepStrictEqual(ids(M.sortEpisodes(feed, positions, { order: "feed", currentId: "5" })), ["5", "4", "3", "2", "1"]);
+  // Defaults: in progress first, by feed; odd input is harmless and the list is not changed.
+  assert.deepStrictEqual(ids(M.sortEpisodes(feed, {}, {})), ["2", "4", "1", "3", "5"]);
+  assert.deepStrictEqual(ids(M.sortEpisodes(feed, null, { currentId: "__proto__" })), ["2", "4", "1", "3", "5"]);
+  assert.strictEqual(M.sortEpisodes(null, null, null).length, 0);
+  assert.deepStrictEqual(ids(feed), ["1", "2", "3", "4", "5"]);
+  // Same show, unknown date: feed order is kept.
+  assert.deepStrictEqual(ids(M.sortEpisodes([ep("7", "A", ""), ep("8", "A", "")], {}, { inProgressFirst: false })), ["7", "8"]);
+  assert.strictEqual(M.inProgress({ ms: 600000, completed: false }, 1800000), true);
+  assert.strictEqual(M.inProgress({ ms: 600000, completed: true }, 1800000), false);
+  assert.strictEqual(M.inProgress(undefined, 1800000), false);
+});

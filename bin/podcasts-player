@@ -77,8 +77,7 @@ cmd_play() {
     --idle=no --audio-display=no --input-ipc-server="$sock" --speed="$(saved_speed)" --start="$start" \
     --force-media-title="$title" ${PODCASTS_MPV_AO:+--ao="$PODCASTS_MPV_AO"} \
     -- "$url" > /dev/null 2>&1 < /dev/null
-  local i
-  for i in $(seq 40); do alive && return 0; sleep 0.1; done
+  for _ in $(seq 40); do alive && return 0; sleep 0.1; done
   printf 'mpv did not start.\n' >&2; exit 31
 }
 

@@ -7,6 +7,8 @@ var episodeLimitMin = 1
 var episodeLimitMax = 50
 var refreshChoices = [30, 60, 120, 180, 360, 720, 1440]
 var sources = ["latest", "up-next"]
+// How the unplayed list is ordered once anything in progress is pinned on top.
+var sortOrders = ["feed", "date"]
 // The skip lengths Apple's own clients offer.
 // Playback speeds on offer, slowest first.
 var speedChoices = [0.8, 1, 1.3, 1.5, 1.8, 2]
@@ -100,6 +102,10 @@ function formatSpeed(value) {
 
 function knownSource(value) {
   return sources.indexOf(value) >= 0 ? value : "latest"
+}
+
+function knownSortOrder(value) {
+  return sortOrders.indexOf(value) >= 0 ? value : "feed"
 }
 
 // bin/podcasts-api prints the response body, then a final line "HTTP <status>".
@@ -243,6 +249,12 @@ function resumeLabel(pos, durationMs) {
   return s > 0 ? "At " + formatClock(s) : ""
 }
 
+// Whether an episode has been started and not finished: the same test that
+// decides whether it resumes somewhere rather than from the top.
+function inProgress(pos, durationMs) {
+  return resumeSeconds(pos, durationMs) > 0
+}
+
 // How far into an episode you are, 0..1, for the bar under its row. 0 when
 // there is nothing started to show (never played, finished, or duration unknown).
 function progressFraction(pos, durationMs) {
@@ -250,6 +262,39 @@ function progressFraction(pos, durationMs) {
   if (!(dur > 0)) return 0
   var s = resumeSeconds(pos, durationMs)
   return s > 0 ? Math.min(1, s / dur) : 0
+}
+
+// The order the list is shown in. With `inProgressFirst`, every episode that
+// has been started (and the one playing now, `currentId`, from its first
+// second) sits on top, the most recently listened to first, so what you are in
+// the middle of is never buried under new arrivals. The rest follows `order`:
+// "feed" groups episodes by show (A to Z, newest first within a show), "date"
+// is newest first across shows, the order Apple sends. Sorting is stable, so
+// ties keep the feed's order. The input is not changed.
+function sortEpisodes(episodes, positions, options) {
+  var list = Array.isArray(episodes) ? episodes : []
+  var pos = positions && typeof positions === "object" ? positions : {}
+  var opts = options || {}
+  var pinFirst = opts.inProgressFirst !== false
+  var order = knownSortOrder(opts.order)
+  var current = episodeId(opts.currentId)
+  var keyed = list.map(function(e, i) {
+    var p = e && e.id !== "" ? pos[e.id] : undefined
+    var started = pinFirst && e && ((current !== "" && e.id === current) || inProgress(p, e.durationMs))
+    var at = started && p && isFinite(Number(p.at)) ? Number(p.at) : 0
+    if (started && current !== "" && e.id === current) at = Infinity
+    var date = Date.parse(text(e && e.published))
+    return { e: e, i: i, started: started, at: at, date: isFinite(date) ? date : -Infinity,
+      show: text(e && e.show).toLowerCase() }
+  })
+  keyed.sort(function(a, b) {
+    if (a.started !== b.started) return a.started ? -1 : 1
+    if (a.started && a.at !== b.at) return a.at > b.at ? -1 : 1
+    if (order === "feed" && a.show !== b.show) return a.show < b.show ? -1 : 1
+    if (a.date !== b.date) return a.date > b.date ? -1 : 1
+    return a.i - b.i
+  })
+  return keyed.map(function(k) { return k.e })
 }
 
 function relativeAge(iso, now) {

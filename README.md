@@ -64,6 +64,17 @@ headless `mpv` that `bin/podcasts-player` drives over its IPC socket (in
 going if the shell reloads. Subscriber-only episodes with no `assetUrl` say so
 instead of playing.
 
+## Order of the list
+
+Anything you have started sits on top of the list, most recently listened to first,
+with the episode playing now leading from its first second, so what you are in the
+middle of is never buried under new arrivals. Below that, episodes are grouped by show
+(A to Z, newest first within each). Both parts are settings, in Omarchy's bar settings
+and in the panel itself: press `,` (or the footer's Settings) for **Started episodes
+first** (`inProgressFirst`), **Then order by** feed or date (`sortOrder`) and the
+**Playback speed**, which is the same one the player's speed button sets. Changes made
+in the panel apply at once and are written to the bar's settings.
+
 ## Picking up where you left off
 
 Your listening position is shared with Apple, so it follows you between the iPhone and

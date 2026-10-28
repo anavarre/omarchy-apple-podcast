@@ -34,7 +34,23 @@ BarWidget {
     root.service.source = Model.knownSource(root.setting("source", "latest"))
     root.service.skipBackSeconds = Model.knownSkip(root.setting("skipBackSeconds", 15), 15)
     root.service.skipForwardSeconds = Model.knownSkip(root.setting("skipForwardSeconds", 15), 15)
+    root.service.inProgressFirst = root.setting("inProgressFirst", true) === true
+    root.service.sortOrder = Model.knownSortOrder(root.setting("sortOrder", "feed"))
   }
+
+  // The panel's Settings view writes back through here: the widget owns the
+  // shell.json entry, so the whole entry is rewritten with the one key changed.
+  function saveSetting(name, value) {
+    if (!root.bar || !root.bar.shell
+        || typeof root.bar.shell.updateEntryInline !== "function") return
+    var entry = { id: root.moduleName }
+    for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
+    entry[name] = value
+    root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function saveInProgressFirst(on) { root.saveSetting("inProgressFirst", on === true) }
+  function saveSortOrder(order) { root.saveSetting("sortOrder", Model.knownSortOrder(order)) }
 
   function injectPanel() {
     root.injectService()

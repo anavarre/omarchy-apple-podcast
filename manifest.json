@@ -29,7 +29,9 @@
       "refreshMinutes": 60,
       "source": "latest",
       "skipBackSeconds": 15,
-      "skipForwardSeconds": 15
+      "skipForwardSeconds": 15,
+      "inProgressFirst": true,
+      "sortOrder": "feed"
     },
     "schema": [
       {
@@ -68,6 +70,24 @@
         ],
         "defaultValue": "latest",
         "description": "Latest episodes from your library, or your Up Next queue."
+      },
+      {
+        "key": "inProgressFirst",
+        "type": "boolean",
+        "label": "Started episodes first",
+        "defaultValue": true,
+        "description": "Pins every episode you have started, and the one playing, to the top of the list, most recently listened to first."
+      },
+      {
+        "key": "sortOrder",
+        "type": "enum",
+        "label": "Then order by",
+        "options": [
+          "feed",
+          "date"
+        ],
+        "defaultValue": "feed",
+        "description": "How the rest of the list is ordered: by show (feed), newest first within each, or by date across shows."
       },
       {
         "key": "skipBackSeconds",

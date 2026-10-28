@@ -43,7 +43,16 @@ Panel {
   // The focused player replaces the list while it is up; Escape goes back.
   property bool playerOpen: false
   readonly property bool showPlayer: root.playerOpen && root.nowPlaying !== null
-    && root.signedIn && !root.showAccount
+    && root.signedIn && !root.showAccount && !root.showSettings
+
+  // The Settings view, reached from the footer or with ",". It replaces the
+  // list while it is up and holds what is worth changing without leaving the
+  // panel: how the list is ordered and the playback speed.
+  property bool settingsOpen: false
+  readonly property bool showSettings: root.settingsOpen && root.signedIn && !root.showAccount
+  readonly property bool inProgressFirst: root.podcasts.inProgressFirst === true
+  readonly property string sortOrder: Model.knownSortOrder(root.podcasts.sortOrder)
+  readonly property var sortOrders: Model.sortOrders
 
   // The account view is reached from the footer; signing in shows by itself
   // when nothing works yet.
@@ -55,12 +64,14 @@ Panel {
   // Finished episodes leave the list and are only reached through the Played
   // view (p).
   property bool showPlayed: false
-  // Played ones are kept by the service, so they outlive the feed.
+  // Played ones are kept by the service, so they outlive the feed. The rest is
+  // ordered as the settings say: started episodes on top, then by show or date.
   readonly property var listed: root.showPlayed ? root.podcasts.playedEpisodes
-    : root.episodes.filter(function(e) {
+    : Model.sortEpisodes(root.episodes.filter(function(e) {
       var pos = root.podcasts.positions[e.id]
       return !(pos ? pos.completed === true : root.podcasts.playedSet[e.id] === true)
-    })
+    }), root.podcasts.positions, { inProgressFirst: root.inProgressFirst, order: root.sortOrder,
+      currentId: root.nowPlaying ? root.nowPlaying.id : "" })
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Color.muted
@@ -88,6 +99,8 @@ Panel {
     readonly property string playError: ""
     readonly property int skipBackSeconds: 15
     readonly property int skipForwardSeconds: 15
+    property bool inProgressFirst: true
+    property string sortOrder: "feed"
     property bool playerVisible: false
     readonly property real speed: 1
     function setSpeed(rate) {}
@@ -106,6 +119,7 @@ Panel {
   onOpenedChanged: {
     if (root.opened) {
       root.accountOpen = false
+      root.settingsOpen = false
       root.playerOpen = false
       root.speedOpen = false
       root.showPlayed = false
@@ -116,7 +130,8 @@ Panel {
 
   // Tell the service when the player is on screen, so it polls mpv every
   // second only then.
-  readonly property bool playerOnScreen: root.opened && root.nowPlaying !== null && root.signedIn && !root.showAccount
+  readonly property bool playerOnScreen: root.opened && root.nowPlaying !== null && root.signedIn
+    && !root.showAccount && !root.showSettings
   onPlayerOnScreenChanged: { if (root.service) root.service.playerVisible = root.playerOnScreen }
 
   function moveSelection(dy) {
@@ -132,6 +147,22 @@ Panel {
   }
 
   onListedChanged: root.selected = Math.max(0, Math.min(root.listed.length - 1, root.selected))
+
+  // Settings take effect at once on the service and are written to shell.json
+  // through the bar widget, which owns the entry; without a widget (or a shell
+  // that cannot write) the change lasts for the session.
+  function setInProgressFirst(on) {
+    if (root.service) root.service.inProgressFirst = on === true
+    if (root.hostWidget && typeof root.hostWidget.saveInProgressFirst === "function") root.hostWidget.saveInProgressFirst(on === true)
+  }
+
+  function setSortOrder(order) {
+    var next = Model.knownSortOrder(order)
+    if (root.service) root.service.sortOrder = next
+    if (root.hostWidget && typeof root.hostWidget.saveSortOrder === "function") root.hostWidget.saveSortOrder(next)
+  }
+
+  function sortOrderLabel(order) { return order === "date" ? "Date" : "Feed" }
 
   function seekFromClick(x, width) {
     if (root.duration > 0 && width > 0) root.podcasts.seekTo(root.duration * Math.max(0, Math.min(1, x / width)))
@@ -164,15 +195,17 @@ Panel {
           if (dx < 0) root.podcasts.skip(-root.skipBack)
           else if (dx > 0) root.podcasts.skip(root.skipForward)
         }
-        else if (!root.showAccount && dy !== 0) root.moveSelection(dy)
+        else if (!root.showAccount && !root.showSettings && dy !== 0) root.moveSelection(dy)
       }
       onActivateRequested: {
         if (root.showAccount) { root.podcasts.forget(); root.accountOpen = false }
+        else if (root.showSettings) root.settingsOpen = false
         else if (root.showPlayer) root.podcasts.togglePlay()
         else root.openEpisode(root.selected)
       }
       onCloseRequested: {
         if (root.showAccount) root.accountOpen = false
+        else if (root.showSettings) root.settingsOpen = false
         else if (root.showPlayer && root.speedOpen) root.speedOpen = false
         else if (root.showPlayer) root.playerOpen = false
         else if (root.showPlayed) { root.showPlayed = false; root.selected = 0 }
@@ -186,8 +219,9 @@ Panel {
           return
         }
         if (text === "r") root.podcasts.refresh()
-        else if (text === "p" && !root.showAccount) { root.showPlayed = !root.showPlayed; root.selected = 0 }
+        else if (text === "p" && !root.showAccount && !root.showSettings) { root.showPlayed = !root.showPlayed; root.selected = 0 }
         else if (text === "c") root.accountOpen = !root.accountOpen
+        else if (text === ",") root.settingsOpen = !root.settingsOpen
       }
 
       Column {
@@ -281,6 +315,157 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
             text: "Enter forgets the stored token. It does not sign you out of Apple; do that on the web player."
+          }
+        }
+
+        // ------------------------------------------------------------ settings
+        Column {
+          id: settingsColumn
+          width: parent.width
+          spacing: Style.space(10)
+          visible: root.showSettings
+
+          // The switch is sized like a button row, so the rows line up.
+          readonly property real controlHeight: Math.max(Style.space(22), Style.font.bodySmall + Style.spacing.sm * 2)
+
+          Text {
+            width: parent.width
+            text: "Settings"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+          }
+
+          Item {
+            width: parent.width
+            height: Math.max(pinCaption.implicitHeight, settingsColumn.controlHeight)
+
+            Column {
+              id: pinCaption
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - pinSwitch.width - Style.space(8)
+              spacing: Style.space(2)
+              Text {
+                width: parent.width
+                text: "Started episodes first"
+                elide: Text.ElideRight
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "What you have started, and what is playing, stays on top, most recent first."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+
+            ToggleSwitch {
+              id: pinSwitch
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              checked: root.inProgressFirst
+              cursorRing: false
+              trackHeight: Math.round(settingsColumn.controlHeight)
+              foreground: root.foreground
+              accent: root.accent
+              onToggled: root.setInProgressFirst(!root.inProgressFirst)
+            }
+          }
+
+          Item {
+            width: parent.width
+            height: Math.max(orderCaption.implicitHeight, orderButtons.implicitHeight)
+
+            Column {
+              id: orderCaption
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - orderButtons.width - Style.space(8)
+              spacing: Style.space(2)
+              Text {
+                width: parent.width
+                text: root.inProgressFirst ? "Then order by" : "Order by"
+                elide: Text.ElideRight
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: root.sortOrder === "date" ? "Newest first, across shows." : "Grouped by show, newest first within each."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+
+            Row {
+              id: orderButtons
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(6)
+              Repeater {
+                model: root.sortOrders
+                Button {
+                  required property var modelData
+                  text: root.sortOrderLabel(modelData)
+                  selected: modelData === root.sortOrder
+                  onClicked: root.setSortOrder(modelData)
+                }
+              }
+            }
+          }
+
+          Item {
+            width: parent.width
+            height: Math.max(speedCaption.implicitHeight, speedButtons.implicitHeight)
+
+            Column {
+              id: speedCaption
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - speedButtons.width - Style.space(8)
+              spacing: Style.space(2)
+              Text {
+                width: parent.width
+                text: "Playback speed"
+                elide: Text.ElideRight
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Applies to what is playing and to every episode after it."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+            }
+
+            Row {
+              id: speedButtons
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(4)
+              Repeater {
+                model: root.speedChoices
+                Button {
+                  required property var modelData
+                  text: Model.formatSpeed(modelData)
+                  selected: modelData === root.speed
+                  onClicked: root.podcasts.setSpeed(modelData)
+                }
+              }
+            }
           }
         }
 
@@ -450,7 +635,7 @@ Panel {
         Column {
           width: parent.width
           spacing: Style.space(4)
-          visible: root.signedIn && !root.showAccount && !root.showPlayer
+          visible: root.signedIn && !root.showAccount && !root.showSettings && !root.showPlayer
 
           // What is playing: a card pinned above the list, with transport
           // controls so it can be paused or skipped without opening the player.
@@ -693,13 +878,21 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
           Text {
+            visible: !root.showAccount && !root.showSettings
             text: root.showPlayed ? "p Unplayed" : "p Played"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
           Text {
-            visible: root.showAccount || root.showPlayed
+            visible: !root.showAccount && !root.showSettings
+            text: ", Settings"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+          Text {
+            visible: root.showAccount || root.showSettings || root.showPlayed
             text: "Esc Back"
             color: root.dim
             font.family: root.fontFamily
