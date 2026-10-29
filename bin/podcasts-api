@@ -128,7 +128,7 @@ jwtexp() {
   printf '%s' "$p" | base64 -d 2> /dev/null | sed -n 's/.*"exp":\([0-9]*\).*/\1/p'
 }
 devtoken() {
-  local cached exp page bundle js tok
+  local cached exp page bundle js tok reached=0
   cached=$(first "$store/dev-token")
   validJwt "$cached" || cached=""
   if [ -n "$cached" ] && [ "${1:-}" != "fresh" ]; then
@@ -141,12 +141,14 @@ devtoken() {
   # redirect leaks nothing.
   bundle=""
   for path in /us/new /us/library /us/browse; do
-    page=$(fetch -L --max-redirs 3 "$web$path") || page=""
+    if page=$(fetch -L --max-redirs 3 "$web$path"); then reached=1; else page=""; fi
     bundle=$(printf '%s' "$page" | grep -oE '/assets/index[^"]*\.js' | head -n1)
     [ -n "$bundle" ] && break
   done
+  # Nothing answered at all: the network is down, not Apple's page changed.
+  [ -n "$bundle" ] || [ "$reached" = 1 ] || { printf 'Could not reach %s.\n' "$web" >&2; exit 20; }
   [ -n "$bundle" ] || { printf 'No script bundle found on %s (tried /us/new, /us/library, /us/browse).\n' "$web" >&2; exit 25; }
-  js=$(fetch "$web$bundle") || js=""
+  js=$(fetch "$web$bundle") || { printf 'Could not reach %s.\n' "$web" >&2; exit 20; }
   tok=$(printf '%s' "$js" | grep -oE 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' | head -n1)
   validJwt "$tok" || { printf 'No developer token found in %s%s.\n' "$web" "$bundle" >&2; exit 25; }
   if ! unsafe && mkdir -p "$store" 2> /dev/null; then chmod 700 "$store" 2> /dev/null; put dev-token "$tok" 2> /dev/null; fi

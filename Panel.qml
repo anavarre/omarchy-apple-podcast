@@ -970,7 +970,7 @@ Panel {
             visible: root.errorText !== ""
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
-            text: root.errorText
+            text: root.authState === "offline" ? "Can't reach Apple Podcasts. Retrying…" : root.errorText
             color: root.urgent
             font.family: root.fontFamily
             font.pixelSize: root.fs(Style.font.bodySmall)

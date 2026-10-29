@@ -401,6 +401,18 @@ Item {
     onTriggered: root.refresh()
   }
 
+  // While offline, retries on a growing delay (5s up to the refresh interval)
+  // instead of waiting out the whole refresh timer with an error on screen.
+  property int retryAttempt: 0
+  onAuthStateChanged: { if (authState !== "offline") retryAttempt = 0 }
+
+  Timer {
+    id: retryTimer
+    interval: Math.min(5000 * Math.pow(2, root.retryAttempt), 300000)
+    running: root.authState === "offline" && !root.loading
+    onTriggered: { root.retryAttempt++; root.refresh() }
+  }
+
   // Polls mpv while there is something to show: every second with the player
   // up, every few seconds otherwise, so playback ending is still noticed.
   Timer {
