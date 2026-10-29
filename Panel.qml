@@ -593,6 +593,48 @@ Panel {
               }
             }
           }
+
+          Item {
+            width: parent.width
+            height: Math.max(webCaption.implicitHeight, settingsColumn.controlHeight)
+
+            Column {
+              id: webCaption
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - webButton.width - Style.space(8)
+              spacing: Style.space(2)
+              Text {
+                width: parent.width
+                text: "Apple Podcasts on the web"
+                elide: Text.ElideRight
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: root.fs(Style.font.body)
+              }
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Opens podcasts.apple.com in your browser."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: root.fs(Style.font.bodySmall)
+              }
+            }
+
+            PanelActionButton {
+              id: webButton
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              // nf-fa-external_link (U+F08E)
+              iconText: ""
+              tooltipText: "Open podcasts.apple.com"
+              foreground: root.foreground
+              hoverColor: root.foreground
+              fontSize: root.fs(Style.font.bodySmall)
+              onClicked: root.podcasts.openUrl("https://podcasts.apple.com/us/library")
+            }
+          }
         }
 
         // -------------------------------------------------------------- player
