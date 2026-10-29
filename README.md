@@ -14,6 +14,14 @@ A bar icon that opens a panel with your latest Apple Podcasts episodes and plays
 
 ## Install
 
+The easy way, also listed on the [Omarchy plugins directory](https://plugins.omarchy.org/plugin.html?id=anavarre.apple-podcasts):
+
+```sh
+omarchy plugin add https://github.com/anavarre/omarchy-apple-podcast.git --enable
+```
+
+Or manually, from a local checkout:
+
 ```sh
 ln -s "$PWD" ~/.config/omarchy/plugins/omarchy-apple-podcasts
 omarchy plugin enable anavarre.apple-podcasts
