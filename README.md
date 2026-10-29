@@ -44,6 +44,7 @@ Click an episode to open the player.
 | `s` | Stop |
 | `Esc` | Back to the list |
 | `p` | Switch between unplayed and played episodes |
+| `m` | Mark the selected episode as played, without listening to it |
 | `,` | Settings |
 
 - **Resume anywhere.** Your position syncs with Apple, so you can switch between your iPhone and this computer.
@@ -58,6 +59,7 @@ Open them from the panel (`,`) or from Omarchy's bar settings:
 - Refresh interval
 - Latest episodes or your Up Next queue
 - Started episodes first, and how the rest is ordered (by show or by date)
+- Text size (small, medium, large or extra large; scales all text in the panel)
 - Skip back / forward length (10–90 seconds)
 - Playback speed
 

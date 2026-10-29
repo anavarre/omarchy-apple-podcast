@@ -77,8 +77,29 @@ Panel {
   readonly property color dim: Color.muted
   readonly property color accent: Color.accent
   readonly property color urgent: bar ? bar.urgent : Color.urgent
+  // Text size is offered as named sizes; every font size in the panel is
+  // scaled by the matching factor.
+  property string textSize: "medium"
+  readonly property var textSizes: [
+    { value: "small", label: "Small", scale: 0.85 },
+    { value: "medium", label: "Medium", scale: 1.0 },
+    { value: "large", label: "Large", scale: 1.2 },
+    { value: "xlarge", label: "Extra large", scale: 1.45 }
+  ]
+  readonly property int textSizeIndex: {
+    for (var i = 0; i < root.textSizes.length; i++)
+      if (root.textSizes[i].value === root.textSize) return i
+    return 1
+  }
+  readonly property real textScale: root.textSizes[root.textSizeIndex].scale
+  readonly property string textSizeLabel: root.textSizes[root.textSizeIndex].label
+
+  // Every font size in this panel goes through here, so one setting moves all
+  // of them together.
+  function fs(size) { return Math.round(size * root.textScale) }
+
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property real cardWidth: panel.fittedContentWidth(Style.space(460))
+  readonly property real cardWidth: panel.fittedContentWidth(Style.space(Math.round(460 * root.textScale)))
 
   QtObject {
     id: inertService
@@ -106,6 +127,7 @@ Panel {
     function setSpeed(rate) {}
     function sameEpisode(a, b) { return false }
     function play(episode) {}
+    function markPlayed(episode) {}
     function togglePlay() {}
     function skip(seconds) {}
     function seekTo(seconds) {}
@@ -160,6 +182,14 @@ Panel {
     var next = Model.knownSortOrder(order)
     if (root.service) root.service.sortOrder = next
     if (root.hostWidget && typeof root.hostWidget.saveSortOrder === "function") root.hostWidget.saveSortOrder(next)
+  }
+
+  function stepTextSize(delta) {
+    var i = Math.max(0, Math.min(root.textSizes.length - 1, root.textSizeIndex + delta))
+    var next = root.textSizes[i].value
+    if (next === root.textSize) return
+    root.textSize = next
+    if (root.hostWidget && typeof root.hostWidget.saveTextSize === "function") root.hostWidget.saveTextSize(next)
   }
 
   function sortOrderLabel(order) { return order === "date" ? "Date" : "Feed" }
@@ -220,6 +250,10 @@ Panel {
         }
         if (text === "r") root.podcasts.refresh()
         else if (text === "p" && !root.showAccount && !root.showSettings) { root.showPlayed = !root.showPlayed; root.selected = 0 }
+        else if (text === "m" && !root.showAccount && !root.showSettings && !root.showPlayed) {
+          var ep = root.listed[root.selected]
+          if (ep) root.podcasts.markPlayed(ep)
+        }
         else if (text === "c") root.accountOpen = !root.accountOpen
         else if (text === ",") root.settingsOpen = !root.settingsOpen
       }
@@ -240,7 +274,7 @@ Panel {
             text: "Sign in to Apple Podcasts"
             color: root.foreground
             font.family: root.fontFamily
-            font.pixelSize: Style.font.subtitle
+            font.pixelSize: root.fs(Style.font.subtitle)
             font.bold: true
           }
 
@@ -250,7 +284,7 @@ Panel {
             wrapMode: Text.WordWrap
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
             text: "Apple has no sign-in for third-party apps, so this uses your session on the web player. "
               + "1. Press Open and sign in with your Apple Account. "
               + "2. In the browser's developer tools, open Storage/Application → Cookies → podcasts.apple.com "
@@ -265,7 +299,7 @@ Panel {
             text: root.signInError
             color: root.urgent
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
           }
 
           TextField {
@@ -273,7 +307,7 @@ Panel {
             width: parent.width
             foreground: root.foreground
             font.family: root.fontFamily
-            font.pixelSize: Style.font.body
+            font.pixelSize: root.fs(Style.font.body)
             password: true
             placeholderText: "media-user-token"
             onAccepted: root.submitToken()
@@ -305,7 +339,7 @@ Panel {
             text: "Signed in"
             color: root.foreground
             font.family: root.fontFamily
-            font.pixelSize: Style.font.subtitle
+            font.pixelSize: root.fs(Style.font.subtitle)
             font.bold: true
           }
           Text {
@@ -313,7 +347,7 @@ Panel {
             wrapMode: Text.WordWrap
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
             text: "Enter forgets the stored token. It does not sign you out of Apple; do that on the web player."
           }
         }
@@ -326,14 +360,14 @@ Panel {
           visible: root.showSettings
 
           // The switch is sized like a button row, so the rows line up.
-          readonly property real controlHeight: Math.max(Style.space(22), Style.font.bodySmall + Style.spacing.sm * 2)
+          readonly property real controlHeight: Math.max(Style.space(22), root.fs(Style.font.bodySmall) + Style.spacing.sm * 2)
 
           Text {
             width: parent.width
             text: "Settings"
             color: root.foreground
             font.family: root.fontFamily
-            font.pixelSize: Style.font.subtitle
+            font.pixelSize: root.fs(Style.font.subtitle)
             font.bold: true
           }
 
@@ -353,7 +387,7 @@ Panel {
                 elide: Text.ElideRight
                 color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: root.fs(Style.font.body)
               }
               Text {
                 width: parent.width
@@ -361,7 +395,7 @@ Panel {
                 text: "What you have started, and what is playing, stays on top, most recent first."
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
+                font.pixelSize: root.fs(Style.font.bodySmall)
               }
             }
 
@@ -394,7 +428,7 @@ Panel {
                 elide: Text.ElideRight
                 color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: root.fs(Style.font.body)
               }
               Text {
                 width: parent.width
@@ -402,7 +436,7 @@ Panel {
                 text: root.sortOrder === "date" ? "Newest first, across shows." : "Grouped by show, newest first within each."
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
+                font.pixelSize: root.fs(Style.font.bodySmall)
               }
             }
 
@@ -425,6 +459,76 @@ Panel {
 
           Item {
             width: parent.width
+            height: Math.max(textSizeCaption.implicitHeight, textSizeControls.implicitHeight)
+
+            Column {
+              id: textSizeCaption
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - textSizeControls.width - Style.space(8)
+              spacing: Style.space(2)
+              Text {
+                width: parent.width
+                text: "Text size"
+                elide: Text.ElideRight
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: root.fs(Style.font.body)
+              }
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Scales all text in the panel."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: root.fs(Style.font.bodySmall)
+              }
+            }
+
+            Row {
+              id: textSizeControls
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(8)
+
+              PanelActionButton {
+                anchors.verticalCenter: parent.verticalCenter
+                // nf-fa-minus (U+F068)
+                iconText: "\uf068"
+                tooltipText: "Smaller"
+                enabled: root.textSizeIndex > 0
+                foreground: root.foreground
+                hoverColor: root.foreground
+                fontSize: root.fs(Style.font.bodySmall)
+                onClicked: root.stepTextSize(-1)
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.max(Style.space(Math.round(80 * root.textScale)), implicitWidth)
+                horizontalAlignment: Text.AlignHCenter
+                text: root.textSizeLabel
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: root.fs(Style.font.body)
+              }
+
+              PanelActionButton {
+                anchors.verticalCenter: parent.verticalCenter
+                // nf-fa-plus (U+F067)
+                iconText: "\uf067"
+                tooltipText: "Larger"
+                enabled: root.textSizeIndex < root.textSizes.length - 1
+                foreground: root.foreground
+                hoverColor: root.foreground
+                fontSize: root.fs(Style.font.bodySmall)
+                onClicked: root.stepTextSize(1)
+              }
+            }
+          }
+
+          Item {
+            width: parent.width
             height: Math.max(speedCaption.implicitHeight, speedButtons.implicitHeight)
 
             Column {
@@ -439,7 +543,7 @@ Panel {
                 elide: Text.ElideRight
                 color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: root.fs(Style.font.body)
               }
               Text {
                 width: parent.width
@@ -447,7 +551,7 @@ Panel {
                 text: "Applies to what is playing and to every episode after it."
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
+                font.pixelSize: root.fs(Style.font.bodySmall)
               }
             }
 
@@ -479,7 +583,7 @@ Panel {
             text: "← Episodes  (Esc)"
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.playerOpen = false }
           }
 
@@ -503,7 +607,7 @@ Panel {
             text: root.nowPlaying ? root.nowPlaying.title : ""
             color: root.foreground
             font.family: root.fontFamily
-            font.pixelSize: Style.font.subtitle
+            font.pixelSize: root.fs(Style.font.subtitle)
             font.bold: true
           }
 
@@ -516,7 +620,7 @@ Panel {
             text: root.nowPlaying ? root.nowPlaying.show : ""
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.body
+            font.pixelSize: root.fs(Style.font.body)
           }
 
           // Progress: click anywhere on the bar to jump there.
@@ -553,14 +657,14 @@ Panel {
               text: Model.formatClock(root.position)
               color: root.dim
               font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: root.fs(Style.font.bodySmall)
             }
             Text {
               anchors.right: parent.right
               text: root.duration > 0 ? "-" + Model.formatClock(root.duration - root.position) : ""
               color: root.dim
               font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: root.fs(Style.font.bodySmall)
             }
           }
 
@@ -618,7 +722,7 @@ Panel {
             text: root.playError
             color: root.urgent
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
           }
 
           Text {
@@ -626,7 +730,7 @@ Panel {
             horizontalAlignment: Text.AlignHCenter
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
             text: "Space play/pause · ←/→ skip · o open in Apple Podcasts · s stop"
           }
         }
@@ -664,7 +768,7 @@ Panel {
                   : root.playerState === "buffering" ? "LOADING…" : "NOW PLAYING"
                 color: root.accent
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
+                font.pixelSize: root.fs(Style.font.bodySmall)
                 font.bold: true
               }
               Text {
@@ -674,7 +778,7 @@ Panel {
                 text: root.nowPlaying ? root.nowPlaying.title : ""
                 color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.subtitle
+                font.pixelSize: root.fs(Style.font.subtitle)
                 font.bold: true
               }
               Text {
@@ -685,7 +789,7 @@ Panel {
                 text: root.nowPlaying ? root.nowPlaying.show : ""
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
+                font.pixelSize: root.fs(Style.font.bodySmall)
               }
               Rectangle {
                 width: parent.width
@@ -718,10 +822,16 @@ Panel {
                   text: Model.formatClock(root.position) + (root.duration > 0 ? " / " + Model.formatClock(root.duration) : "")
                   color: root.dim
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
+                  font.pixelSize: root.fs(Style.font.bodySmall)
                 }
               }
             }
+          }
+
+          Item {
+            width: parent.width
+            height: Style.space(8)
+            visible: root.nowPlaying !== null
           }
 
           Text {
@@ -732,7 +842,7 @@ Panel {
             text: root.playError
             color: root.urgent
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
           }
 
           Text {
@@ -743,7 +853,7 @@ Panel {
             text: root.errorText
             color: root.urgent
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
           }
 
           Text {
@@ -752,7 +862,7 @@ Panel {
             text: root.showPlayed ? "No played episodes." : "No episodes."
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.body
+            font.pixelSize: root.fs(Style.font.body)
           }
 
           Repeater {
@@ -800,7 +910,7 @@ Panel {
                   text: row.modelData.title
                   color: root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
+                  font.pixelSize: root.fs(Style.font.body)
                 }
                 Text {
                   width: parent.width
@@ -808,7 +918,7 @@ Panel {
                   textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
+                  font.pixelSize: root.fs(Style.font.bodySmall)
                   text: [row.modelData.show, Model.relativeAge(row.modelData.published),
                     Model.formatDuration(row.modelData.durationMs),
                     Model.resumeLabel(root.podcasts.positions[row.modelData.id], row.modelData.durationMs)].filter(function(s) { return s !== "" }).join(" · ")
@@ -849,7 +959,7 @@ Panel {
                   anchors.centerIn: parent
                   text: rowPlay.active ? "⏸" : "▶"
                   color: "white"
-                  font.pixelSize: Style.font.body
+                  font.pixelSize: root.fs(Style.font.body)
                 }
               }
               MouseArea {
@@ -875,35 +985,42 @@ Panel {
             text: root.loading ? "Refreshing…" : "r Refresh"
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
           }
           Text {
             visible: !root.showAccount && !root.showSettings
             text: root.showPlayed ? "p Unplayed" : "p Played"
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
+          }
+          Text {
+            visible: !root.showAccount && !root.showSettings && !root.showPlayed
+            text: "m Mark played"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: root.fs(Style.font.bodySmall)
           }
           Text {
             visible: !root.showAccount && !root.showSettings
             text: ", Settings"
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
           }
           Text {
             visible: root.showAccount || root.showSettings || root.showPlayed
             text: "Esc Back"
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
           }
           Text {
             visible: !root.showAccount
             text: "c Account"
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: root.fs(Style.font.bodySmall)
           }
         }
       }

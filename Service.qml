@@ -279,6 +279,19 @@ Item {
     root.flushPush()
   }
 
+  // Marks an episode finished without playing it, here and on Apple. Without a
+  // known duration the position is a nominal second, which Apple still treats as
+  // completed.
+  function markPlayed(e) {
+    if (!e || !/^[0-9]+$/.test(e.id)) return
+    var ms = e.durationMs > 0 ? Math.round(e.durationMs) : 1000
+    root.saveLocal(e.id, ms, true)
+    if (!root.hasToken) return
+    root.pendingPush = root.pendingPush.filter(function(p) { return p.id !== e.id })
+      .concat([{ id: e.id, ms: ms, done: true, key: e.id + ":" + ms + ":true" }])
+    root.flushPush()
+  }
+
   function saveLocal(id, ms, done) {
     var key = id + ":" + ms + ":" + done
     if (key === root.localKey) return

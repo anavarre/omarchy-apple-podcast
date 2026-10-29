@@ -136,7 +136,7 @@ test("positions and resuming", () => {
   assert.strictEqual(M.isFinished(1795, 1800), true);
   assert.strictEqual(M.isFinished(1700, 1800), false);
   assert.strictEqual(M.isFinished(100, 0), false);
-  assert.strictEqual(M.resumeLabel(p["1"], 1800000), "At 12:34");
+  assert.strictEqual(M.resumeLabel(p["1"], 1800000), "");
   assert.strictEqual(M.resumeLabel(p["2"], 1800000), "Played");
   assert.strictEqual(M.resumeLabel(undefined, 1800000), "");
   assert.strictEqual(M.progressFraction({ ms: 900000, completed: false }, 1800000), 0.5);
@@ -175,6 +175,8 @@ test("sortEpisodes", () => {
   };
   assert.strictEqual(M.knownSortOrder("date"), "date");
   assert.strictEqual(M.knownSortOrder("nope"), "feed");
+  for (const size of ["small", "medium", "large", "xlarge"]) assert.strictEqual(M.knownTextSize(size), size);
+  for (const size of ["huge", "", null, 3, "Medium"]) assert.strictEqual(M.knownTextSize(size), "medium");
   // In progress first, most recently listened to on top, then by show and date.
   assert.deepStrictEqual(ids(M.sortEpisodes(feed, positions, { inProgressFirst: true, order: "feed" })), ["4", "3", "2", "1", "5"]);
   // Then by date instead: Apple's order for the rest.

@@ -9,6 +9,7 @@ var refreshChoices = [30, 60, 120, 180, 360, 720, 1440]
 var sources = ["latest", "up-next"]
 // How the unplayed list is ordered once anything in progress is pinned on top.
 var sortOrders = ["feed", "date"]
+var textSizeValues = ["small", "medium", "large", "xlarge"]
 // The skip lengths Apple's own clients offer.
 // Playback speeds on offer, slowest first.
 var speedChoices = [0.8, 1, 1.3, 1.5, 1.8, 2]
@@ -106,6 +107,10 @@ function knownSource(value) {
 
 function knownSortOrder(value) {
   return sortOrders.indexOf(value) >= 0 ? value : "feed"
+}
+
+function knownTextSize(value) {
+  return textSizeValues.indexOf(value) >= 0 ? value : "medium"
 }
 
 // bin/podcasts-api prints the response body, then a final line "HTTP <status>".
@@ -241,12 +246,10 @@ function isFinished(seconds, duration) {
   return Number(duration) > 0 && Number(seconds) >= Number(duration) - resumeTailSeconds
 }
 
-// "Resumes at 25:26" / "Played", for an episode row; "" when there is nothing to say.
+// "Played", for an episode row; "" otherwise. The resume position is tracked
+// (see resumeSeconds) but deliberately not shown; the progress bar covers it.
 function resumeLabel(pos, durationMs) {
-  if (!pos) return ""
-  if (pos.completed) return "Played"
-  var s = resumeSeconds(pos, durationMs)
-  return s > 0 ? "At " + formatClock(s) : ""
+  return pos && pos.completed ? "Played" : ""
 }
 
 // Whether an episode has been started and not finished: the same test that

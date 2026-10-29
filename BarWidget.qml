@@ -51,6 +51,7 @@ BarWidget {
 
   function saveInProgressFirst(on) { root.saveSetting("inProgressFirst", on === true) }
   function saveSortOrder(order) { root.saveSetting("sortOrder", Model.knownSortOrder(order)) }
+  function saveTextSize(size) { root.saveSetting("textSize", Model.knownTextSize(size)) }
 
   function injectPanel() {
     root.injectService()
@@ -59,6 +60,7 @@ BarWidget {
     panelLoader.item.anchorItem = button
     panelLoader.item.hostWidget = root
     panelLoader.item.service = root.service
+    panelLoader.item.textSize = Model.knownTextSize(root.setting("textSize", "medium"))
   }
 
   implicitWidth: button.implicitWidth
