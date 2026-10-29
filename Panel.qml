@@ -10,6 +10,27 @@ Panel {
   moduleName: "anavarre.apple-podcasts"
   manageIpc: false
 
+  // Artwork that tries again when a load fails (a dropped connection, a CDN
+  // hiccup) instead of leaving its slot blank until the panel is rebuilt.
+  component ArtImage: Image {
+    id: art
+    property string url: ""
+    property int attempts: 0
+    property bool blank: false
+    source: art.blank ? "" : art.url
+    visible: art.url !== ""
+    fillMode: Image.PreserveAspectCrop
+    cache: true
+    asynchronous: true
+    onUrlChanged: art.attempts = 0
+    onStatusChanged: if (art.status === Image.Error && art.attempts < 4) retryTimer.restart()
+    Timer {
+      id: retryTimer
+      interval: 1500 * (art.attempts + 1)
+      onTriggered: { art.attempts++; art.blank = true; Qt.callLater(function() { art.blank = false }) }
+    }
+  }
+
   property var anchorItem: null
   property var hostWidget: null
 
@@ -588,14 +609,11 @@ Panel {
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.playerOpen = false }
           }
 
-          Image {
+          ArtImage {
             anchors.horizontalCenter: parent.horizontalCenter
             width: Style.space(160)
             height: width
-            visible: source !== ""
-            source: root.nowPlaying ? root.nowPlaying.artworkLarge : ""
-            fillMode: Image.PreserveAspectCrop
-            asynchronous: true
+            url: root.nowPlaying ? (root.nowPlaying.artworkLarge || root.nowPlaying.artwork) : ""
           }
 
           Text {
@@ -669,29 +687,49 @@ Panel {
             }
           }
 
-          Row {
-            anchors.horizontalCenter: parent.horizontalCenter
-            spacing: Style.space(10)
+          // The play button sits at the exact centre, under the artwork; the
+          // other buttons hang off either side of it, so the speed button may
+          // end up off-centre.
+          Item {
+            width: parent.width
+            height: playButton.height
             Button {
+              id: speedButton
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.right: backButton.left
+              anchors.rightMargin: Style.space(10)
               text: Model.formatSpeed(root.speed)
               tooltipText: "Playback speed"
               active: root.speedOpen
               onClicked: root.speedOpen = !root.speedOpen
             }
             Button {
-              text: "−" + root.skipBack + "s"
-              tooltipText: "Back " + root.skipBack + " seconds (←)"
+              id: backButton
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.right: playButton.left
+              anchors.rightMargin: Style.space(10)
+              text: "\u2212" + root.skipBack + "s"
+              tooltipText: "Back " + root.skipBack + " seconds (\u2190)"
               enabled: root.playerState !== "ended"
               onClicked: root.podcasts.skip(-root.skipBack)
             }
             Button {
-              text: root.playerState === "ended" ? "Replay" : root.isPlaying ? "Pause" : root.playerState === "buffering" ? "Loading…" : "Play"
-              tooltipText: "Play / pause (Space)"
+              id: playButton
+              anchors.centerIn: parent
+              iconText: root.playerState === "ended" ? "\uf01e" : root.isPlaying ? "\uf04c" : root.playerState === "buffering" ? "\uf110" : "\uf04b"
+              iconSpinning: root.playerState === "buffering"
+              iconSize: Style.font.icon * 1.8
+              horizontalPadding: Style.space(16)
+              verticalPadding: Style.space(8)
+              tooltipText: (root.playerState === "ended" ? "Replay" : root.isPlaying ? "Pause" : "Play") + " (Space)"
               onClicked: root.podcasts.togglePlay()
             }
             Button {
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.left: playButton.right
+              anchors.leftMargin: Style.space(10)
               text: "+" + root.skipForward + "s"
-              tooltipText: "Forward " + root.skipForward + " seconds (→)"
+              tooltipText: "Forward " + root.skipForward + " seconds (\u2192)"
               enabled: root.playerState !== "ended"
               onClicked: root.podcasts.skip(root.skipForward)
             }
@@ -755,12 +793,26 @@ Panel {
 
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.playerOpen = true }
 
+            ArtImage {
+              id: nowIcon
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(10)
+              width: visible ? Style.space(56) : 0
+              height: width
+              url: root.nowPlaying ? (root.nowPlaying.artwork || root.nowPlaying.artworkLarge) : ""
+              sourceSize: Qt.size(Style.space(112), Style.space(112))
+            }
+
             Column {
               id: nowColumn
-              anchors.left: parent.left
+              anchors.left: nowIcon.right
+              anchors.leftMargin: nowIcon.visible ? Style.space(10) : 0
               anchors.right: parent.right
+              anchors.rightMargin: Style.space(10)
               anchors.verticalCenter: parent.verticalCenter
-              anchors.margins: Style.space(10)
+              anchors.topMargin: Style.space(10)
+              anchors.bottomMargin: Style.space(10)
               spacing: Style.space(6)
 
               Text {
@@ -807,16 +859,28 @@ Panel {
               Row {
                 spacing: Style.space(8)
                 Button {
-                  iconText: root.playerState === "ended" ? "" : root.isPlaying ? "" : root.playerState === "buffering" ? "" : ""
+                  text: Model.formatSpeed(root.speed)
+                  tooltipText: "Playback speed"
+                  active: root.speedOpen
+                  onClicked: root.speedOpen = !root.speedOpen
+                }
+                Button {
+                  text: "−" + root.skipBack + "s"
+                  tooltipText: "Back " + root.skipBack + " seconds"
+                  enabled: root.playerState !== "ended"
+                  onClicked: root.podcasts.skip(-root.skipBack)
+                }
+                Button {
+                  iconText: root.playerState === "ended" ? "\uf01e" : root.isPlaying ? "\uf04c" : root.playerState === "buffering" ? "\uf110" : "\uf04b"
                   iconSpinning: root.playerState === "buffering"
                   tooltipText: root.playerState === "ended" ? "Replay" : root.isPlaying ? "Pause" : "Play"
                   onClicked: root.podcasts.togglePlay()
                 }
                 Button {
-                  text: "+30s"
-                  tooltipText: "Forward 30 seconds"
+                  text: "+" + root.skipForward + "s"
+                  tooltipText: "Forward " + root.skipForward + " seconds"
                   enabled: root.playerState !== "ended"
-                  onClicked: root.podcasts.skip(30)
+                  onClicked: root.podcasts.skip(root.skipForward)
                 }
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
@@ -824,6 +888,19 @@ Panel {
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: root.fs(Style.font.bodySmall)
+                }
+              }
+              Row {
+                spacing: Style.space(6)
+                visible: root.speedOpen
+                Repeater {
+                  model: root.speedChoices
+                  Button {
+                    required property var modelData
+                    text: Model.formatSpeed(modelData)
+                    selected: modelData === root.speed
+                    onClicked: { root.podcasts.setSpeed(modelData); root.speedOpen = false }
+                  }
                 }
               }
             }
@@ -881,19 +958,15 @@ Panel {
               // Episodes of one show share the same artwork URL, and Image's pixmap
               // cache keeps the decoded bitmap in memory, so each icon is fetched
               // once however many rows use it.
-              Image {
+              ArtImage {
                 id: rowIcon
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.leftMargin: Style.space(8)
                 width: visible ? Style.space(32) : 0
                 height: width
-                visible: source !== ""
-                source: row.modelData.artwork
+                url: row.modelData.artwork || row.modelData.artworkLarge
                 sourceSize: Qt.size(Style.space(64), Style.space(64))
-                fillMode: Image.PreserveAspectCrop
-                cache: true
-                asynchronous: true
               }
 
               Column {

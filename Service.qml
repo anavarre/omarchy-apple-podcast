@@ -44,9 +44,7 @@ Item {
   // (Model.parsePositions). Playing an episode asks Apple again, so this only
   // has to be good enough to label the list.
   property var positions: ({})
-  // Episodes finished on any device, newest first, kept on this machine too
-  // (played.json) so they stay listed after the feed moves on. Apple's saved
-  // position decides whether one is still played.
+  // Listed episodes Apple reports as finished on any device (syncPlayed).
   property var playedEpisodes: []
   readonly property var playedSet: {
     var s = ({})
@@ -59,42 +57,42 @@ Item {
   // never lands after them.
   property int session: 0
   property bool refreshQueued: false
-  property bool playedDirty: false
 
   onEpisodeLimitChanged: refreshSoon()
   onSourceChanged: refreshSoon()
   onRefreshMinutesChanged: timer.restart()
 
-  onEpisodesChanged: root.syncPlayed()
+  onEpisodesChanged: { root.syncPlayed(); root.restoreNowPlaying() }
+  onPlayedEpisodesChanged: root.restoreNowPlaying()
   onPositionsChanged: root.syncPlayed()
 
-  function syncPlayed() {
-    var cands = root.episodes.concat(root.nowPlaying ? [root.nowPlaying] : [])
-    var seen = ({}), next = []
-    cands.forEach(function(e) {
-      var pos = root.positions[e.id]
-      if (e.id && pos && pos.completed === true && !seen[e.id]) { seen[e.id] = true; next.push(e) }
-    })
-    root.playedEpisodes.forEach(function(e) {
-      var pos = root.positions[e.id]
-      if (seen[e.id] || (pos && pos.completed === false)) return
-      seen[e.id] = true
-      next.push(e)
-    })
-    next = next.slice(0, 200)
-    var same = next.length === root.playedEpisodes.length && next.every(function(e, i) { return e.id === root.playedEpisodes[i].id })
-    if (same) return
-    root.playedEpisodes = next
-    root.savePlayed()
+  // mpv only remembers an episode's title (cut to what the player script
+  // keeps), so an episode adopted after a shell reload is matched back to the
+  // known ones by it to recover its artwork, show and id.
+  function knownEpisodeByTitle(title) {
+    var t = String(title).replace(/[\x00-\x1F\x7F]/g, "").slice(0, 200)
+    var all = root.episodes.concat(root.playedEpisodes)
+    for (var i = 0; i < all.length; i++)
+      if (all[i].title.replace(/[\x00-\x1F\x7F]/g, "").slice(0, 200) === t) return all[i]
+    return null
   }
 
-  function savePlayed() {
-    if (!root.hasToken) return
-    if (playedSaveProcess.running) { root.playedDirty = true; return }
-    playedSaveProcess.payload = JSON.stringify(root.playedEpisodes)
-    playedSaveProcess.command = ["/usr/bin/bash", root.api, "saveplayed"]
-    playedSaveProcess.stdinEnabled = true
-    playedSaveProcess.running = true
+  function restoreNowPlaying() {
+    var e = root.nowPlaying
+    if (!e || e.id !== "" || e.title === "") return
+    var known = root.knownEpisodeByTitle(e.title)
+    if (known) root.nowPlaying = known
+  }
+
+  // Played is a mirror of the feed: exactly the listed episodes Apple reports
+  // as completed. Once Apple stops listing an episode, it leaves here too.
+  function syncPlayed() {
+    var next = root.episodes.filter(function(e) {
+      var pos = root.positions[e.id]
+      return e.id && pos && pos.completed === true
+    })
+    var same = next.length === root.playedEpisodes.length && next.every(function(e, i) { return e.id === root.playedEpisodes[i].id })
+    if (!same) root.playedEpisodes = next
   }
 
   function refreshSoon() { if (authState === "ok") Qt.callLater(refresh) }
@@ -480,6 +478,7 @@ Item {
         // Adopted after a shell reload: all that is known is the title.
         root.nowPlaying = { id: "", title: st.title, show: "", published: "", url: "",
           artwork: "", artworkLarge: "", assetUrl: "", durationMs: 0 }
+        root.restoreNowPlaying()
       root.position = st.position
       // Our speed is the setting; mpv's only wins for audio adopted after a reload.
       if (adopted) root.speed = st.speed
@@ -502,47 +501,8 @@ Item {
       try { info = JSON.parse(configOut.text) } catch (e) { info = {} }
       root.hasToken = info.hasToken === true
       root.storeDir = Model.text(info.store)
-      if (root.hasToken) { root.refresh(); playedGetProcess.command = ["/usr/bin/bash", root.api, "getplayed"]; playedGetProcess.running = true }
+      if (root.hasToken) { root.refresh() }
       else root.authState = "signedOut"
-    }
-  }
-
-  Process {
-    id: playedGetProcess
-    running: false
-    command: []
-    clearEnvironment: true
-    environment: Model.environment
-    stdout: StdioCollector { id: playedGetOut; waitForEnd: true }
-    onExited: function(exitCode) {
-      var kept = []
-      try { kept = JSON.parse(playedGetOut.text) } catch (e) { kept = [] }
-      if (!Array.isArray(kept)) return
-      var have = root.playedSet
-      // The file is this plugin's own, but it is checked like the feed: a
-      // stored URL is only used if it is still a web URL.
-      var extra = kept.map(Model.sanitizeEpisode).filter(function(e) { return e.id !== "" && !have[e.id] })
-      if (extra.length === 0) return
-      root.playedEpisodes = root.playedEpisodes.concat(extra).slice(0, 200)
-      root.refreshPositions()
-    }
-  }
-
-  Process {
-    id: playedSaveProcess
-    property string payload: ""
-    running: false
-    command: []
-    clearEnvironment: true
-    environment: Model.environment
-    stdinEnabled: true
-    onStarted: {
-      write(payload)
-      payload = ""
-      stdinEnabled = false
-    }
-    onExited: function(exitCode) {
-      if (root.playedDirty) { root.playedDirty = false; Qt.callLater(root.savePlayed) }
     }
   }
 
