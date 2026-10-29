@@ -62,12 +62,13 @@ Panel {
   property int selected: 0
 
   // Finished episodes leave the list and are only reached through the Played
-  // view (p).
+  // view (p). The episode in the now playing card leaves it too, until stopped.
   property bool showPlayed: false
   // Played ones are kept by the service, so they outlive the feed. The rest is
   // ordered as the settings say: started episodes on top, then by show or date.
   readonly property var listed: root.showPlayed ? root.podcasts.playedEpisodes
     : Model.sortEpisodes(root.episodes.filter(function(e) {
+      if (root.nowPlaying !== null && root.playerState !== "ended" && root.podcasts.sameEpisode(root.nowPlaying, e)) return false
       var pos = root.podcasts.positions[e.id]
       return !(pos ? pos.completed === true : root.podcasts.playedSet[e.id] === true)
     }), root.podcasts.positions, { inProgressFirst: root.inProgressFirst, order: root.sortOrder,
@@ -903,14 +904,49 @@ Panel {
                 anchors.margins: Style.space(8)
                 spacing: Style.space(2)
 
-                Text {
+                // The selected row's title scrolls sideways when it doesn't fit.
+                Item {
+                  id: titleBox
                   width: parent.width
-                  elide: Text.ElideRight
-                  textFormat: Text.PlainText
-                  text: row.modelData.title
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: root.fs(Style.font.body)
+                  height: rowTitle.implicitHeight
+                  clip: true
+                  readonly property real overflow: rowTitle.implicitWidth - width
+                  readonly property bool scrolling: row.index === root.selected && overflow > 0
+
+                  Text {
+                    id: rowTitle
+                    width: titleBox.scrolling ? implicitWidth : parent.width
+                    elide: titleBox.scrolling ? Text.ElideNone : Text.ElideRight
+                    wrapMode: Text.NoWrap
+                    textFormat: Text.PlainText
+                    text: row.modelData.title
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: root.fs(Style.font.body)
+                  }
+
+                  SequentialAnimation {
+                    running: titleBox.scrolling
+                    loops: Animation.Infinite
+                    onRunningChanged: if (!running) rowTitle.x = 0
+                    PauseAnimation { duration: 1200 }
+                    NumberAnimation {
+                      target: rowTitle
+                      property: "x"
+                      from: 0
+                      to: -titleBox.overflow
+                      duration: Math.max(1000, titleBox.overflow * 25)
+                      easing.type: Easing.InOutSine
+                    }
+                    PauseAnimation { duration: 1200 }
+                    NumberAnimation {
+                      target: rowTitle
+                      property: "x"
+                      to: 0
+                      duration: Math.max(1000, titleBox.overflow * 25)
+                      easing.type: Easing.InOutSine
+                    }
+                  }
                 }
                 Text {
                   width: parent.width
@@ -946,18 +982,16 @@ Panel {
                 onClicked: root.openEpisode(row.index)
               }
 
-              // Play/pause straight from the list: the icon turns into a button on hover.
+              // Play straight from the list: the icon turns into a button on hover.
               Rectangle {
                 id: rowPlay
-                readonly property bool current: root.podcasts.sameEpisode(root.nowPlaying, row.modelData) && root.playerState !== "ended"
-                readonly property bool active: current && (root.isPlaying || root.playerState === "buffering")
                 anchors.fill: rowIcon
                 visible: rowIconHover.containsMouse
                 radius: Style.space(4)
                 color: Qt.rgba(0, 0, 0, 0.55)
                 Text {
                   anchors.centerIn: parent
-                  text: rowPlay.active ? "" : ""
+                  text: ""
                   color: "white"
                   font.family: root.fontFamily
                   font.pixelSize: root.fs(Style.font.body)
@@ -969,10 +1003,7 @@ Panel {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onEntered: root.selected = row.index
-                onClicked: {
-                  if (rowPlay.current) root.podcasts.togglePlay()
-                  else root.podcasts.play(root.listed[row.index])
-                }
+                onClicked: root.podcasts.play(root.listed[row.index])
               }
             }
           }
