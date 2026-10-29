@@ -957,8 +957,9 @@ Panel {
                 color: Qt.rgba(0, 0, 0, 0.55)
                 Text {
                   anchors.centerIn: parent
-                  text: rowPlay.active ? "⏸" : "▶"
+                  text: rowPlay.active ? "" : ""
                   color: "white"
+                  font.family: root.fontFamily
                   font.pixelSize: root.fs(Style.font.body)
                 }
               }
