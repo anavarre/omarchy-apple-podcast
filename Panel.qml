@@ -100,6 +100,9 @@ Panel {
   property bool showPlayed: false
   // Where an episode was left; every read of a position in the list goes here.
   function positionOf(e) {
+    // TEMP-TEST: pretend the Moicano Nolan fight finished 12 hours ago.
+    if (e && String(e.title).indexOf("Moicano") >= 0 && String(e.title).indexOf("Nolan") >= 0)
+      return { ms: 0, completed: true, at: root.now - 0.5 * 86400000 }
     return root.podcasts.positions[e.id]
   }
   function finishedRecently(e) {
@@ -115,6 +118,11 @@ Panel {
       return true
     }), root.podcasts.positions, { inProgressFirst: root.inProgressFirst, order: root.sortOrder,
       currentId: root.nowPlaying ? root.nowPlaying.id : "" })
+
+  // Whether any listed episode was started and left, which the header mentions.
+  readonly property bool hasInProgress: root.listed.some(function(e) {
+    return Model.inProgress(root.podcasts.positions[e.id], e.durationMs)
+  })
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Color.muted
@@ -165,6 +173,7 @@ Panel {
     readonly property int skipForwardSeconds: 15
     property bool inProgressFirst: true
     property string sortOrder: "feed"
+    property int keepFinishedDays: 1
     property bool playerVisible: false
     readonly property real speed: 1
     function setSpeed(rate) {}
@@ -173,7 +182,6 @@ Panel {
     function markPlayed(episode) {}
     function togglePlay() {}
     function skip(seconds) {}
-    property int keepFinishedDays: 1
     function seekTo(seconds) {}
     function stopPlayback() {}
     function refresh() {}
@@ -228,18 +236,18 @@ Panel {
     if (root.hostWidget && typeof root.hostWidget.saveSortOrder === "function") root.hostWidget.saveSortOrder(next)
   }
 
+  function setKeepFinishedDays(days) {
+    var next = Model.knownKeepDays(days)
+    if (root.service) root.service.keepFinishedDays = next
+    if (root.hostWidget && typeof root.hostWidget.saveKeepFinishedDays === "function") root.hostWidget.saveKeepFinishedDays(next)
+  }
+
   function stepTextSize(delta) {
     var i = Math.max(0, Math.min(root.textSizes.length - 1, root.textSizeIndex + delta))
     var next = root.textSizes[i].value
     if (next === root.textSize) return
     root.textSize = next
     if (root.hostWidget && typeof root.hostWidget.saveTextSize === "function") root.hostWidget.saveTextSize(next)
-  }
-
-  function setKeepFinishedDays(days) {
-    var next = Model.knownKeepDays(days)
-    if (root.service) root.service.keepFinishedDays = next
-    if (root.hostWidget && typeof root.hostWidget.saveKeepFinishedDays === "function") root.hostWidget.saveKeepFinishedDays(next)
   }
 
   function sortOrderLabel(order) { return order === "date" ? "Date" : "Feed" }
@@ -509,14 +517,6 @@ Panel {
 
           Item {
             width: parent.width
-            height: Math.max(textSizeCaption.implicitHeight, textSizeControls.implicitHeight)
-
-            Column {
-              id: textSizeCaption
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-          Item {
-            width: parent.width
             height: Math.max(keepCaption.implicitHeight, keepButtons.implicitHeight)
 
             Column {
@@ -560,6 +560,14 @@ Panel {
             }
           }
 
+          Item {
+            width: parent.width
+            height: Math.max(textSizeCaption.implicitHeight, textSizeControls.implicitHeight)
+
+            Column {
+              id: textSizeCaption
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
               width: parent.width - textSizeControls.width - Style.space(8)
               spacing: Style.space(2)
               Text {
@@ -897,6 +905,17 @@ Panel {
 
           // What is playing: a card pinned above the list, with transport
           // controls so it can be paused or skipped without opening the player.
+          Text {
+            width: parent.width
+            visible: root.nowPlaying !== null
+            text: root.playerState === "paused" ? "PAUSED" : root.playerState === "ended" ? "FINISHED"
+              : root.playerState === "buffering" ? "LOADING…" : "NOW PLAYING"
+            color: root.accent
+            font.family: root.fontFamily
+            font.pixelSize: root.fs(Style.font.bodySmall)
+            font.bold: true
+          }
+
           Rectangle {
             width: parent.width
             height: nowColumn.implicitHeight + Style.space(20)
@@ -930,15 +949,6 @@ Panel {
               anchors.bottomMargin: Style.space(10)
               spacing: Style.space(6)
 
-              Text {
-                width: parent.width
-                text: root.playerState === "paused" ? "PAUSED" : root.playerState === "ended" ? "FINISHED"
-                  : root.playerState === "buffering" ? "LOADING…" : "NOW PLAYING"
-                color: root.accent
-                font.family: root.fontFamily
-                font.pixelSize: root.fs(Style.font.bodySmall)
-                font.bold: true
-              }
               Text {
                 width: parent.width
                 elide: Text.ElideRight
@@ -1029,6 +1039,15 @@ Panel {
 
           Text {
             width: parent.width
+            text: root.showPlayed ? "PLAYED" : root.hasInProgress ? "UNPLAYED & IN PROGRESS" : "UNPLAYED"
+            color: root.accent
+            font.family: root.fontFamily
+            font.pixelSize: root.fs(Style.font.bodySmall)
+            font.bold: true
+          }
+
+          Text {
+            width: parent.width
             visible: root.playError !== "" && !root.showPlayer
             wrapMode: Text.WordWrap
             textFormat: Text.PlainText
@@ -1095,6 +1114,11 @@ Panel {
                 // The selected row's title scrolls sideways when it doesn't fit.
                 Item {
                   width: parent.width
+                  height: titleBox.height
+
+                Item {
+                  id: titleBox
+                  width: Math.min(rowTitle.implicitWidth, parent.width - (rowDone.visible ? rowDone.implicitWidth + Style.space(6) : 0))
                   height: rowTitle.implicitHeight
                   clip: true
                   readonly property real overflow: rowTitle.implicitWidth - width
@@ -1114,11 +1138,6 @@ Panel {
 
                   SequentialAnimation {
                     running: titleBox.scrolling
-                  height: titleBox.height
-
-                Item {
-                  id: titleBox
-                  width: Math.min(rowTitle.implicitWidth, parent.width - (rowDone.visible ? rowDone.implicitWidth + Style.space(6) : 0))
                     loops: Animation.Infinite
                     onRunningChanged: if (!running) rowTitle.x = 0
                     PauseAnimation { duration: 1200 }
@@ -1140,6 +1159,21 @@ Panel {
                     }
                   }
                 }
+
+                // A finished episode that is still listed.
+                Text {
+                  id: rowDone
+                  anchors.left: titleBox.right
+                  anchors.leftMargin: Style.space(6)
+                  anchors.verticalCenter: titleBox.verticalCenter
+                  visible: !root.showPlayed && root.finishedRecently(row.modelData)
+                  text: "\u2713"
+                  color: "#2ea043"
+                  font.family: root.fontFamily
+                  font.pixelSize: root.fs(Style.font.body)
+                  font.bold: true
+                }
+                }
                 Text {
                   width: parent.width
                   elide: Text.ElideRight
@@ -1159,21 +1193,6 @@ Panel {
                   visible: fraction > 0
                   color: Qt.alpha(root.foreground, 0.2)
                   Rectangle {
-
-                // A finished episode that is still listed.
-                Text {
-                  id: rowDone
-                  anchors.left: titleBox.right
-                  anchors.leftMargin: Style.space(6)
-                  anchors.verticalCenter: titleBox.verticalCenter
-                  visible: !root.showPlayed && root.finishedRecently(row.modelData)
-                  text: "\u2713"
-                  color: "#2ea043"
-                  font.family: root.fontFamily
-                  font.pixelSize: root.fs(Style.font.body)
-                  font.bold: true
-                }
-                }
                     width: parent.width * parent.fraction
                     height: parent.height
                     radius: parent.radius
