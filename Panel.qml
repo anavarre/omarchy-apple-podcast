@@ -74,6 +74,17 @@ Panel {
   readonly property bool inProgressFirst: root.podcasts.inProgressFirst === true
   readonly property string sortOrder: Model.knownSortOrder(root.podcasts.sortOrder)
   readonly property var sortOrders: Model.sortOrders
+  readonly property int keepFinishedDays: Model.knownKeepDays(root.podcasts.keepFinishedDays)
+  readonly property var keepDaysChoices: Model.keepDaysChoices
+  // The clock the "finished within N days" test reads, refreshed while the
+  // panel is open so a row leaves the list without waiting for a refresh.
+  property real now: Date.now()
+  Timer {
+    interval: 60000
+    repeat: true
+    running: root.opened
+    onTriggered: root.now = Date.now()
+  }
 
   // The account view is reached from the footer; signing in shows by itself
   // when nothing works yet.
@@ -82,16 +93,26 @@ Panel {
   readonly property bool showAccount: root.accountOpen && root.signedIn
   property int selected: 0
 
-  // Finished episodes leave the list and are only reached through the Played
-  // view (p). The episode in the now playing card leaves it too, until stopped.
+  // Finished episodes stay listed with a green check mark for the number of
+  // days set in Settings, then leave the list and are only reached through the
+  // Played view (p). The episode in the now playing card leaves it too, until
+  // stopped.
   property bool showPlayed: false
+  // Where an episode was left; every read of a position in the list goes here.
+  function positionOf(e) {
+    return root.podcasts.positions[e.id]
+  }
+  function finishedRecently(e) {
+    return Model.recentlyFinished(root.positionOf(e), root.now, root.keepFinishedDays)
+  }
   // Played ones are kept by the service, so they outlive the feed. The rest is
   // ordered as the settings say: started episodes on top, then by show or date.
   readonly property var listed: root.showPlayed ? root.podcasts.playedEpisodes
     : Model.sortEpisodes(root.episodes.filter(function(e) {
       if (root.nowPlaying !== null && root.playerState !== "ended" && root.podcasts.sameEpisode(root.nowPlaying, e)) return false
-      var pos = root.podcasts.positions[e.id]
-      return !(pos ? pos.completed === true : root.podcasts.playedSet[e.id] === true)
+      var pos = root.positionOf(e)
+      if (pos ? pos.completed === true : root.podcasts.playedSet[e.id] === true) return root.finishedRecently(e)
+      return true
     }), root.podcasts.positions, { inProgressFirst: root.inProgressFirst, order: root.sortOrder,
       currentId: root.nowPlaying ? root.nowPlaying.id : "" })
 
@@ -152,6 +173,7 @@ Panel {
     function markPlayed(episode) {}
     function togglePlay() {}
     function skip(seconds) {}
+    property int keepFinishedDays: 1
     function seekTo(seconds) {}
     function stopPlayback() {}
     function refresh() {}
@@ -212,6 +234,12 @@ Panel {
     if (next === root.textSize) return
     root.textSize = next
     if (root.hostWidget && typeof root.hostWidget.saveTextSize === "function") root.hostWidget.saveTextSize(next)
+  }
+
+  function setKeepFinishedDays(days) {
+    var next = Model.knownKeepDays(days)
+    if (root.service) root.service.keepFinishedDays = next
+    if (root.hostWidget && typeof root.hostWidget.saveKeepFinishedDays === "function") root.hostWidget.saveKeepFinishedDays(next)
   }
 
   function sortOrderLabel(order) { return order === "date" ? "Date" : "Feed" }
@@ -487,6 +515,51 @@ Panel {
               id: textSizeCaption
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
+          Item {
+            width: parent.width
+            height: Math.max(keepCaption.implicitHeight, keepButtons.implicitHeight)
+
+            Column {
+              id: keepCaption
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - keepButtons.width - Style.space(8)
+              spacing: Style.space(2)
+              Text {
+                width: parent.width
+                text: "Keep finished episodes"
+                elide: Text.ElideRight
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: root.fs(Style.font.body)
+              }
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "They stay listed with a check mark, then move to Played only."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: root.fs(Style.font.bodySmall)
+              }
+            }
+
+            Row {
+              id: keepButtons
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(6)
+              Repeater {
+                model: root.keepDaysChoices
+                Button {
+                  required property var modelData
+                  text: modelData + (modelData === 1 ? " day" : " days")
+                  selected: modelData === root.keepFinishedDays
+                  onClicked: root.setKeepFinishedDays(modelData)
+                }
+              }
+            }
+          }
+
               width: parent.width - textSizeControls.width - Style.space(8)
               spacing: Style.space(2)
               Text {
@@ -1021,7 +1094,6 @@ Panel {
 
                 // The selected row's title scrolls sideways when it doesn't fit.
                 Item {
-                  id: titleBox
                   width: parent.width
                   height: rowTitle.implicitHeight
                   clip: true
@@ -1042,6 +1114,11 @@ Panel {
 
                   SequentialAnimation {
                     running: titleBox.scrolling
+                  height: titleBox.height
+
+                Item {
+                  id: titleBox
+                  width: Math.min(rowTitle.implicitWidth, parent.width - (rowDone.visible ? rowDone.implicitWidth + Style.space(6) : 0))
                     loops: Animation.Infinite
                     onRunningChanged: if (!running) rowTitle.x = 0
                     PauseAnimation { duration: 1200 }
@@ -1072,7 +1149,7 @@ Panel {
                   font.pixelSize: root.fs(Style.font.bodySmall)
                   text: [row.modelData.show, Model.relativeAge(row.modelData.published),
                     Model.formatDuration(row.modelData.durationMs),
-                    Model.resumeLabel(root.podcasts.positions[row.modelData.id], row.modelData.durationMs)].filter(function(s) { return s !== "" }).join(" · ")
+                    Model.resumeLabel(root.positionOf(row.modelData), row.modelData.durationMs)].filter(function(s) { return s !== "" }).join(" · ")
                 }
                 Rectangle {
                   readonly property real fraction: Model.progressFraction(root.podcasts.positions[row.modelData.id], row.modelData.durationMs)
@@ -1082,6 +1159,21 @@ Panel {
                   visible: fraction > 0
                   color: Qt.alpha(root.foreground, 0.2)
                   Rectangle {
+
+                // A finished episode that is still listed.
+                Text {
+                  id: rowDone
+                  anchors.left: titleBox.right
+                  anchors.leftMargin: Style.space(6)
+                  anchors.verticalCenter: titleBox.verticalCenter
+                  visible: !root.showPlayed && root.finishedRecently(row.modelData)
+                  text: "\u2713"
+                  color: "#2ea043"
+                  font.family: root.fontFamily
+                  font.pixelSize: root.fs(Style.font.body)
+                  font.bold: true
+                }
+                }
                     width: parent.width * parent.fraction
                     height: parent.height
                     radius: parent.radius

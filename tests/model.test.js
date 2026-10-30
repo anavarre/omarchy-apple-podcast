@@ -197,3 +197,22 @@ test("sortEpisodes", () => {
   assert.strictEqual(M.inProgress({ ms: 600000, completed: true }, 1800000), false);
   assert.strictEqual(M.inProgress(undefined, 1800000), false);
 });
+
+test("knownKeepDays only accepts 1, 3 or 7", () => {
+  assert.strictEqual(M.knownKeepDays(7), 7);
+  assert.strictEqual(M.knownKeepDays("3"), 3);
+  assert.strictEqual(M.knownKeepDays(5), 1);
+});
+
+test("recentlyFinished keeps a finished episode for the chosen days", () => {
+  const now = 10 * 86400000;
+  const done = (daysAgo) => ({ completed: true, at: now - daysAgo * 86400000 });
+  assert.strictEqual(M.recentlyFinished(done(0.5), now, 1), true);
+  assert.strictEqual(M.recentlyFinished(done(1.5), now, 1), false);
+  assert.strictEqual(M.recentlyFinished(done(1.5), now, 3), true);
+  assert.strictEqual(M.recentlyFinished(done(6), now, 7), true);
+  assert.strictEqual(M.recentlyFinished(done(8), now, 7), false);
+  assert.strictEqual(M.recentlyFinished({ completed: false, at: now }, now, 7), false);
+  assert.strictEqual(M.recentlyFinished({ completed: true, at: 0 }, now, 7), false);
+  assert.strictEqual(M.recentlyFinished(undefined, now, 7), false);
+});

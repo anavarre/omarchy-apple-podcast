@@ -9,6 +9,8 @@ var refreshChoices = [30, 60, 120, 180, 360, 720, 1440]
 var sources = ["latest", "up-next"]
 // How the unplayed list is ordered once anything in progress is pinned on top.
 var sortOrders = ["feed", "date"]
+// How many days a finished episode stays listed, with a check mark.
+var keepDaysChoices = [1, 3, 7]
 var textSizeValues = ["small", "medium", "large", "xlarge"]
 // The skip lengths Apple's own clients offer.
 // Playback speeds on offer, slowest first.
@@ -107,6 +109,11 @@ function knownSource(value) {
 
 function knownSortOrder(value) {
   return sortOrders.indexOf(value) >= 0 ? value : "feed"
+}
+
+function knownKeepDays(value) {
+  var n = Number(value)
+  return keepDaysChoices.indexOf(n) >= 0 ? n : 1
 }
 
 function knownTextSize(value) {
@@ -256,6 +263,14 @@ function resumeLabel(pos, durationMs) {
 // decides whether it resumes somewhere rather than from the top.
 function inProgress(pos, durationMs) {
   return resumeSeconds(pos, durationMs) > 0
+}
+
+// Whether an episode was finished within the last `days` days (`now` in ms):
+// those stay listed with a check mark, older ones leave the list.
+function recentlyFinished(pos, now, days) {
+  if (!pos || pos.completed !== true || !(pos.at > 0)) return false
+  var age = Number(now) - pos.at
+  return age < knownKeepDays(days) * 86400000
 }
 
 // How far into an episode you are, 0..1, for the bar under its row. 0 when

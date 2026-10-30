@@ -36,6 +36,7 @@ BarWidget {
     root.service.skipForwardSeconds = Model.knownSkip(root.setting("skipForwardSeconds", 15), 15)
     root.service.inProgressFirst = root.setting("inProgressFirst", true) === true
     root.service.sortOrder = Model.knownSortOrder(root.setting("sortOrder", "feed"))
+    root.service.keepFinishedDays = Model.knownKeepDays(root.setting("keepFinishedDays", 1))
   }
 
   // The panel's Settings view writes back through here: the widget owns the
@@ -51,6 +52,7 @@ BarWidget {
 
   function saveInProgressFirst(on) { root.saveSetting("inProgressFirst", on === true) }
   function saveSortOrder(order) { root.saveSetting("sortOrder", Model.knownSortOrder(order)) }
+  function saveKeepFinishedDays(days) { root.saveSetting("keepFinishedDays", Model.knownKeepDays(days)) }
   function saveTextSize(size) { root.saveSetting("textSize", Model.knownTextSize(size)) }
 
   function injectPanel() {
