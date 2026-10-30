@@ -284,7 +284,7 @@ cmd_setposition() {
   case "$id" in ''|*[!0-9]*) usage 'setposition: ID must be an episode id' ;; esac
   case "$ms" in ''|*[!0-9]*) usage 'setposition: MS must be a number of milliseconds' ;; esac
   case "$done" in true|false) ;; *) usage 'setposition: DONE must be true or false' ;; esac
-  apireq PUT "/v1/me/playback/positions/podcast-episodes?ids=$id" \
+  apireq PUT "/v1/me/playback/positions/podcast-episodes/$id" \
     "{\"type\":\"playback-positions\",\"attributes\":{\"positionInMilliseconds\":$ms,\"recordedAtTimestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",\"completed\":$done}}" 10
 }
 

@@ -47,12 +47,15 @@ class H(BaseHTTPRequestHandler):
         q = parse_qs(urlparse(self.path).query)
         return [i for v in q.get("ids", []) for i in v.split(",") if i]
     def do_PUT(self):
-        if urlparse(self.path).path != POS_PATH: return self.send(404, "{}")
+        # Like Apple, a write names its one episode in the path; ?ids= is a 405.
+        path = urlparse(self.path).path
+        if path == POS_PATH: return self.send(405, '{"code":405,"message":"HTTP 405 Method Not Allowed"}')
+        if not path.startswith(POS_PATH + "/"): return self.send(404, "{}")
         if not self.authed(): return
-        ids = self.ids()
+        id = path[len(POS_PATH) + 1:]
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-        if len(ids) != 1 or body.get("type") != "playback-positions": return self.send(400, "{}")
-        POSITIONS[ids[0]] = body["attributes"]
+        if not id or body.get("type") != "playback-positions": return self.send(400, "{}")
+        POSITIONS[id] = body["attributes"]
         self.send(204, "")
     def do_GET(self):
         p = self.path.split("?")[0]
