@@ -44,8 +44,11 @@ Item {
   // (Model.parsePositions). Playing an episode asks Apple again, so this only
   // has to be good enough to label the list.
   property var positions: ({})
-  // Listed episodes Apple reports as finished on any device (syncPlayed).
+  // Episodes finished on any device, newest first, kept on this machine too
+  // (played.json) so they stay listed after the feed moves on. Apple's saved
+  // position decides whether one is still played.
   property var playedEpisodes: []
+  readonly property int playedLimit: 10
   readonly property var playedSet: {
     var s = ({})
     for (var i = 0; i < root.playedEpisodes.length; i++) s[root.playedEpisodes[i].id] = true
@@ -57,6 +60,7 @@ Item {
   // never lands after them.
   property int session: 0
   property bool refreshQueued: false
+  property bool playedDirty: false
 
   onEpisodeLimitChanged: refreshSoon()
   onSourceChanged: refreshSoon()
@@ -84,15 +88,39 @@ Item {
     if (known) root.nowPlaying = known
   }
 
-  // Played is a mirror of the feed: exactly the listed episodes Apple reports
-  // as completed. Once Apple stops listing an episode, it leaves here too.
+  // Played: episodes Apple reports as completed (from the feed or the one
+  // playing), then those already kept that Apple has not marked unfinished.
   function syncPlayed() {
-    var next = root.episodes.filter(function(e) {
+    var cands = root.episodes.concat(root.nowPlaying ? [root.nowPlaying] : [])
+    var seen = ({}), next = []
+    cands.forEach(function(e) {
       var pos = root.positions[e.id]
-      return e.id && pos && pos.completed === true
+      if (e.id && pos && pos.completed === true && !seen[e.id]) { seen[e.id] = true; next.push(e) }
     })
+    root.playedEpisodes.forEach(function(e) {
+      var pos = root.positions[e.id]
+      if (seen[e.id] || (pos && pos.completed === false)) return
+      seen[e.id] = true
+      next.push(e)
+    })
+    // Most recently finished first (the position's timestamp), at most playedLimit.
+    var when = function(e) { var pos = root.positions[e.id]; return pos && pos.at > 0 ? pos.at : 0 }
+    next = next.map(function(e, i) { return { e: e, i: i } })
+      .sort(function(a, b) { return when(b.e) - when(a.e) || a.i - b.i })
+      .slice(0, root.playedLimit).map(function(x) { return x.e })
     var same = next.length === root.playedEpisodes.length && next.every(function(e, i) { return e.id === root.playedEpisodes[i].id })
-    if (!same) root.playedEpisodes = next
+    if (same) return
+    root.playedEpisodes = next
+    root.savePlayed()
+  }
+
+  function savePlayed() {
+    if (!root.hasToken) return
+    if (playedSaveProcess.running) { root.playedDirty = true; return }
+    playedSaveProcess.payload = JSON.stringify(root.playedEpisodes)
+    playedSaveProcess.command = ["/usr/bin/bash", root.api, "saveplayed"]
+    playedSaveProcess.stdinEnabled = true
+    playedSaveProcess.running = true
   }
 
   function refreshSoon() { if (authState === "ok") Qt.callLater(refresh) }
@@ -513,8 +541,47 @@ Item {
       try { info = JSON.parse(configOut.text) } catch (e) { info = {} }
       root.hasToken = info.hasToken === true
       root.storeDir = Model.text(info.store)
-      if (root.hasToken) { root.refresh() }
+      if (root.hasToken) { root.refresh(); playedGetProcess.command = ["/usr/bin/bash", root.api, "getplayed"]; playedGetProcess.running = true }
       else root.authState = "signedOut"
+    }
+  }
+
+  Process {
+    id: playedGetProcess
+    running: false
+    command: []
+    clearEnvironment: true
+    environment: Model.environment
+    stdout: StdioCollector { id: playedGetOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      var kept = []
+      try { kept = JSON.parse(playedGetOut.text) } catch (e) { kept = [] }
+      if (!Array.isArray(kept)) return
+      var have = root.playedSet
+      // The file is this plugin's own, but it is checked like the feed: a
+      // stored URL is only used if it is still a web URL.
+      var extra = kept.map(Model.sanitizeEpisode).filter(function(e) { return e.id !== "" && !have[e.id] })
+      if (extra.length === 0) return
+      root.playedEpisodes = root.playedEpisodes.concat(extra).slice(0, root.playedLimit)
+      root.refreshPositions()
+    }
+  }
+
+  Process {
+    id: playedSaveProcess
+    property string payload: ""
+    running: false
+    command: []
+    clearEnvironment: true
+    environment: Model.environment
+    stdinEnabled: true
+    onStarted: {
+      write(payload)
+      payload = ""
+      stdinEnabled = false
+    }
+    onExited: function(exitCode) {
+      if (root.playedDirty) { root.playedDirty = false; Qt.callLater(root.savePlayed) }
     }
   }
 
